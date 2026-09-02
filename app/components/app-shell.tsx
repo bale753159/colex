@@ -1,0 +1,109 @@
+"use client";
+
+import {
+  ArrowLeftRight,
+  Bell,
+  ChevronDown,
+  CircleHelp,
+  LayoutDashboard,
+  Menu,
+  ReceiptText,
+  Search,
+  Settings,
+  ShieldCheck,
+  Users,
+  WalletCards,
+  X,
+} from "lucide-react";
+import Link from "next/link";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+
+type AppShellProps = {
+  active: "overview" | "transactions" | "c2c" | "customers" | "accounts";
+  searchValue: string;
+  onSearchChange: (value: string) => void;
+  searchPlaceholder?: string;
+  children: ReactNode;
+};
+
+const navItems = [
+  { id: "overview", label: "ภาพรวม", href: "/", icon: LayoutDashboard },
+  { id: "transactions", label: "ธุรกรรม", href: "/#transactions", icon: ReceiptText },
+  { id: "c2c", label: "รายการ C2C", href: "/c2c-transactions", icon: ArrowLeftRight },
+  { id: "customers", label: "ลูกค้า", href: "/customers", icon: Users },
+  { id: "accounts", label: "บัญชีและกระเป๋า", href: "/#accounts", icon: WalletCards },
+] as const;
+
+export default function AppShell({ active, searchValue, onSearchChange, searchPlaceholder = "ค้นหาลูกค้า เลขที่บัญชี หรือธุรกรรม", children }: AppShellProps) {
+  const [mobileNav, setMobileNav] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    function focusSearch(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+      if (event.key === "Escape") setMobileNav(false);
+    }
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
+
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${mobileNav ? "open" : ""}`}>
+        <div className="brand">
+          <span className="brand-mark">K</span>
+          <span><strong>KLANG</strong><small>FINANCE OPS</small></span>
+          <button className="icon-button sidebar-close" onClick={() => setMobileNav(false)} aria-label="ปิดเมนู"><X size={20} /></button>
+        </div>
+
+        <nav className="primary-nav" aria-label="เมนูหลัก">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            return <Link key={item.id} className={active === item.id ? "active" : ""} href={item.href} onClick={() => setMobileNav(false)}><Icon size={19} />{item.label}</Link>;
+          })}
+        </nav>
+
+        <div className="nav-section-label">ระบบ</div>
+        <nav className="primary-nav secondary" aria-label="เมนูระบบ">
+          <a href="#security"><ShieldCheck size={19} />ความปลอดภัย</a>
+          <a href="#settings"><Settings size={19} />ตั้งค่า</a>
+          <a href="#help"><CircleHelp size={19} />ศูนย์ช่วยเหลือ</a>
+        </nav>
+
+        <div className="sidebar-status">
+          <span className="status-dot" />
+          <span><strong>SQLite พร้อมใช้งาน</strong><small>บันทึกข้อมูลในเครื่อง</small></span>
+        </div>
+      </aside>
+
+      {mobileNav && <button className="nav-backdrop" aria-label="ปิดเมนู" onClick={() => setMobileNav(false)} />}
+
+      <main className="main-content">
+        <header className="topbar">
+          <div className="mobile-brand-wrap">
+            <button className="icon-button menu-button" onClick={() => setMobileNav(true)} aria-label="เปิดเมนู"><Menu size={21} /></button>
+            <span className="brand-mark small">K</span>
+          </div>
+          <label className="global-search">
+            <Search size={18} />
+            <input ref={searchRef} value={searchValue} onChange={(event) => onSearchChange(event.target.value)} placeholder={searchPlaceholder} aria-label="ค้นหา" />
+            <kbd>⌘ K</kbd>
+          </label>
+          <div className="topbar-actions">
+            <button className="icon-button notification-button" aria-label="การแจ้งเตือน"><Bell size={19} /><span /></button>
+            <div className="user-divider" />
+            <button className="profile-button" aria-label="เมนูผู้ใช้">
+              <span className="avatar admin">ก</span>
+              <span className="profile-copy"><strong>กนกวรรณ</strong><small>Finance Admin</small></span>
+              <ChevronDown size={16} />
+            </button>
+          </div>
+        </header>
+        {children}
+      </main>
+    </div>
+  );
+}
