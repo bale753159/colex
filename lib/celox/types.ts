@@ -276,6 +276,13 @@ export type CeloxC2CCallbackEventName =
   | "cancelled"
   | "failed";
 
+export type C2CCallbackPart = {
+  transactionId: string;
+  orderId: string;
+  amount: number;
+  status: string;
+};
+
 export type CeloxC2CCallbackRequest = {
   transactionId: string;
   orderId: string;
@@ -285,6 +292,10 @@ export type CeloxC2CCallbackRequest = {
   occurredAt: string | null;
   event?: CeloxC2CCallbackEventName;
   transferTo?: C2CTransferTo;
+  // ทุก callback ของ C2C มีเสมอ (แม้รายการไม่เคยถูกแบ่ง ก็ยังเป็น array หนึ่งสมาชิก)
+  parts: [C2CCallbackPart, ...C2CCallbackPart[]];
+  // มีเฉพาะ callback ฝั่งถอน C2C — เป็น 0 เมื่อคู่ปิดเต็มยอด
+  unfilledAmount?: number;
 };
 
 // Celox ignores the acknowledgement body, but keeping it typed makes the

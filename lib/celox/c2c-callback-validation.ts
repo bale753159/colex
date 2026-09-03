@@ -1,4 +1,5 @@
 import type {
+  C2CCallbackPart,
   CeloxC2CCallbackEventName,
   CeloxC2CCallbackRequest,
   C2CTransferTo,
@@ -16,8 +17,11 @@ const CALLBACK_KEYS = new Set([
   "occurredAt",
   "event",
   "transferTo",
+  "parts",
+  "unfilledAmount",
 ]);
 const TRANSFER_TO_KEYS = ["bankCode", "bankName", "accountName", "accountNo"] as const;
+const PART_KEYS = new Set(["transactionId", "orderId", "amount", "status"]);
 const EVENT_NAMES = new Set<CeloxC2CCallbackEventName>([
   "matched",
   "settled",
@@ -78,6 +82,26 @@ function isPositiveCentAmount(value: unknown): value is number {
     && Math.abs((value * 100) - Math.round(value * 100)) <= 1e-8;
 }
 
+function isNonNegativeCentAmount(value: unknown): value is number {
+  return typeof value === "number"
+    && Number.isFinite(value)
+    && value >= 0
+    && Number.isSafeInteger(Math.round(value * 100))
+    && Math.abs((value * 100) - Math.round(value * 100)) <= 1e-8;
+}
+
+function isC2CCallbackPart(value: unknown): value is C2CCallbackPart {
+  if (!isRecord(value)) return false;
+  if (Object.keys(value).some((key) => !PART_KEYS.has(key))) return false;
+  return typeof value.transactionId === "string"
+    && UUID_PATTERN.test(value.transactionId)
+    && isBoundedText(value.orderId, 200)
+    && isPositiveCentAmount(value.amount)
+    && typeof value.status === "string"
+    && value.status.length <= 64
+    && STATUS_PATTERN.test(value.status);
+}
+
 function isTransferTo(value: unknown): value is C2CTransferTo {
   if (!isRecord(value)) return false;
   if (Object.keys(value).some((key) => !TRANSFER_TO_KEYS.includes(key as typeof TRANSFER_TO_KEYS[number]))) {
@@ -94,10 +118,16 @@ export function isCeloxC2CCallbackRequest(value: unknown): value is CeloxC2CCall
   if (!isRecord(value)) return false;
   if (Object.keys(value).some((key) => !CALLBACK_KEYS.has(key))) return false;
   if (!Object.hasOwn(value, "referenceId") || !Object.hasOwn(value, "occurredAt")) return false;
+  if (!Object.hasOwn(value, "parts")) return false;
 
   const validEvent = !Object.hasOwn(value, "event")
     || (typeof value.event === "string" && EVENT_NAMES.has(value.event as CeloxC2CCallbackEventName));
   const validTransferTo = !Object.hasOwn(value, "transferTo") || isTransferTo(value.transferTo);
+  const validParts = Array.isArray(value.parts)
+    && value.parts.length > 0
+    && value.parts.every(isC2CCallbackPart);
+  const validUnfilledAmount = !Object.hasOwn(value, "unfilledAmount")
+    || isNonNegativeCentAmount(value.unfilledAmount);
 
   return typeof value.transactionId === "string"
     && UUID_PATTERN.test(value.transactionId)
@@ -109,5 +139,7 @@ export function isCeloxC2CCallbackRequest(value: unknown): value is CeloxC2CCall
     && isPositiveCentAmount(value.amount)
     && (value.occurredAt === null || isIsoDate(value.occurredAt))
     && validEvent
-    && validTransferTo;
+    && validTransferTo
+    && validParts
+    && validUnfilledAmount;
 }

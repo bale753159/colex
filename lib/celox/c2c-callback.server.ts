@@ -28,7 +28,8 @@ function callbackSecret() {
 
 /**
  * C2C signs six fields in this exact order. `event` is deliberately excluded;
- * `transferTo` is appended only when the incoming body contains that key.
+ * `transferTo`, `parts` and `unfilledAmount` are appended, in that order,
+ * only when the incoming body actually contains that key.
  */
 export function canonicalizeCeloxC2CCallback(payload: CeloxC2CCallbackRequest) {
   const signedPayload: Record<string, unknown> = {
@@ -47,6 +48,17 @@ export function canonicalizeCeloxC2CCallback(payload: CeloxC2CCallbackRequest) {
       accountName: transferTo?.accountName ?? null,
       accountNo: transferTo?.accountNo ?? null,
     };
+  }
+  if (Object.hasOwn(payload, "parts")) {
+    signedPayload.parts = payload.parts.map((part) => ({
+      transactionId: part.transactionId,
+      orderId: part.orderId,
+      amount: part.amount,
+      status: part.status,
+    }));
+  }
+  if (Object.hasOwn(payload, "unfilledAmount")) {
+    signedPayload.unfilledAmount = payload.unfilledAmount;
   }
   return JSON.stringify(signedPayload);
 }
