@@ -1,5 +1,6 @@
 import { attachC2CDepositSlip } from "@/lib/celox/c2c-client.server";
 import { celoxErrorResponse, jsonError } from "@/lib/celox/c2c-route.server";
+import { canAttachC2CSlip, isValidC2CUploadToken } from "@/lib/celox/c2c-validation";
 import { CeloxError } from "@/lib/celox/client.server";
 import { getCeloxC2CIntent, recordCeloxC2CSlipResult } from "@/lib/db";
 
@@ -8,6 +9,7 @@ const configuredMaxSlipBytes = Number(process.env.CELOX_MAX_SLIP_BYTES);
 const MAX_SLIP_BYTES = Number.isFinite(configuredMaxSlipBytes) && configuredMaxSlipBytes > 0
   ? Math.floor(configuredMaxSlipBytes)
   : 10 * 1024 * 1024;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ACCEPTED_IMAGE_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -21,6 +23,32 @@ export async function POST(
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params;
+  if (!UUID_PATTERN.test(id)) {
+    return jsonError(400, {
+      error: "transactionId ของรายการฝาก C2C ไม่ถูกต้อง",
+      code: "invalid_request",
+      retryable: false,
+    });
+  }
+
+  // browser ส่ง uploadToken มาทาง header ไม่ใช่ query เหมือนเส้นสลิปฝากปกติ
+  // เพื่อไม่ให้ token ติดไปกับ log ของ URL แล้ว server ค่อยแปลงเป็น ?uploadToken= ตอนยิงขึ้น Celox
+  if (new URL(request.url).searchParams.size !== 0) {
+    return jsonError(400, {
+      error: "คำขอแนบสลิป C2C ต้องไม่มี query string",
+      code: "invalid_request",
+      retryable: false,
+    });
+  }
+  const uploadToken = request.headers.get("X-Celox-Upload-Token")?.trim() ?? "";
+  if (uploadToken && !isValidC2CUploadToken(uploadToken)) {
+    return jsonError(401, {
+      error: "ลิงก์อัปโหลดสลิปไม่ถูกต้องหรือหมดอายุแล้ว",
+      code: "unauthenticated",
+      retryable: false,
+    });
+  }
+
   const contentType = request.headers.get("Content-Type")?.toLowerCase() ?? "";
   if (!contentType.startsWith("multipart/form-data;")) {
     return jsonError(415, {
@@ -82,6 +110,19 @@ export async function POST(
         retryable: false,
       });
     }
+    // รายการที่ยังรอจับคู่ รอสลิป หรือสลิปรอบก่อนไม่ผ่าน (PENDING_TRANSFER / EXPIRED)
+    // แนบไฟล์ใหม่กับ transactionId เดิมได้ ห้ามสร้างรายการฝากใหม่
+    if (!canAttachC2CSlip(intent.transactionStatus)) {
+      return jsonError(422, {
+        error: intent.transactionStatus === "PENDING_APPROVE"
+          ? "รายการนี้มีสลิปที่รอเจ้าหน้าที่ตรวจอยู่แล้ว จึงแนบซ้ำไม่ได้"
+          : "รายการฝาก C2C นี้ไม่ได้อยู่ในสถานะรอสลิป",
+        code: intent.transactionStatus === "PENDING_APPROVE"
+          ? "slip_already_submitted"
+          : "deposit_not_awaiting_transfer",
+        retryable: false,
+      });
+    }
   } catch {
     return jsonError(500, {
       error: "ตรวจสอบรายการฝาก C2C ในระบบไม่สำเร็จ",
@@ -91,7 +132,7 @@ export async function POST(
   }
 
   try {
-    const result = await attachC2CDepositSlip(id, file);
+    const result = await attachC2CDepositSlip(id, file, { uploadToken });
     try {
       recordCeloxC2CSlipResult(result);
     } catch {

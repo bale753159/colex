@@ -117,14 +117,30 @@ export type C2CSlipVerification = {
   [key: string]: unknown;
 };
 
+export type C2CDepositSlipStatus =
+  | "SUCCESS"
+  | "PENDING_APPROVE"
+  | "PENDING_TRANSFER"
+  | "EXPIRED";
+
 export type C2CDepositSlipResponse = {
   transactionId: string;
   orderId: string;
-  transactionStatus: "SUCCESS" | "PENDING_APPROVE" | "PENDING_TRANSFER" | "EXPIRED";
+  // SUCCESS = สำเร็จทั้งคู่พร้อมกันในทรานแซกชันเดียว
+  // PENDING_APPROVE = สลิปตรงบางส่วน รอเจ้าหน้าที่ · PENDING_TRANSFER / EXPIRED = สลิปไม่ผ่าน แนบใหม่ได้
+  transactionStatus: C2CDepositSlipStatus;
   slipVerification: C2CSlipVerification;
-  counterparty: {
+  // Celox บอกแค่สถานะของคู่ ไม่มี id ไม่มีบัญชี ไม่มีชื่อองค์กร
+  // เป็น null เมื่อรายการตกไปที่บัญชีกลางแทนการจับคู่ และอาจไม่มีคีย์นี้เลยเพราะเป็นฟิลด์แบบมีเงื่อนไข
+  counterparty?: {
     transactionStatus: string;
   } | null;
+};
+
+export type C2CAttachSlipOptions = {
+  // ใช้แทนการลงลายเซ็นได้ ถ้ามี token ที่ผูกกับ transactionId นี้
+  // ใส่มาแล้วจะไม่ส่ง header ของ Celox เลย (ทั้ง X-Api-Key, X-Timestamp และ X-Signature)
+  uploadToken?: string;
 };
 
 export type CancelC2CTransactionResponse = {

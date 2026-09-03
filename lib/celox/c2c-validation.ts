@@ -215,3 +215,22 @@ export function validateCreateC2CWithdrawal(value: unknown): ParsedRequest<Creat
     },
   };
 }
+
+// สถานะที่ยังแนบสลิปกับ transactionId เดิมได้: รอจับคู่ รอสลิป หรือสลิปรอบก่อนไม่ผ่าน
+// PENDING_APPROVE กับ SUCCESS แนบซ้ำไม่ได้ Celox ตอบ slip_already_submitted
+const C2C_SLIP_REATTACHABLE_STATUSES = new Set([
+  "PENDING",
+  "PENDING_TRANSFER",
+  "EXPIRED",
+]);
+
+export function canAttachC2CSlip(transactionStatus: string) {
+  return C2C_SLIP_REATTACHABLE_STATUSES.has(transactionStatus.trim().toUpperCase());
+}
+
+// uploadToken เดินทางใน query string จึงห้ามมีอักขระควบคุมหรือช่องว่างที่ทำให้ URL เพี้ยน
+export function isValidC2CUploadToken(value: string) {
+  return value.length > 0
+    && value.length <= 2_048
+    && !/[\u0000-\u0020\u007f]/.test(value);
+}

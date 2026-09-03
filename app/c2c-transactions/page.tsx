@@ -11,10 +11,12 @@ import {
   RefreshCcw,
   Search,
   ShieldAlert,
+  UploadCloud,
   XCircle,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AppShell from "@/app/components/app-shell";
+import C2CSlipUploadDialog from "@/app/components/c2c-slip-upload-dialog";
 import { c2cStatusDescription, c2cStatusLabel, c2cStatusTone, isC2CTerminal } from "@/lib/celox/c2c-display";
 import type {
   C2CTransactionResponse,
@@ -39,6 +41,13 @@ function referenceOf(item: CeloxC2CListItem) {
   return item.referenceId || item.orderId;
 }
 
+// รายการฝากที่ยังรอสลิป หรือสลิปรอบก่อนไม่ผ่าน ยังแนบไฟล์ใหม่กับ transactionId เดิมได้
+// ใช้กับกรณีปิด dialog ตอนสร้างรายการไปแล้ว จึงต้องกลับมาแนบสลิปจากหน้านี้
+function canAttachSlip(item: { direction: string; transactionStatus: string }) {
+  return item.direction === "deposit"
+    && (item.transactionStatus === "PENDING_TRANSFER" || item.transactionStatus === "EXPIRED");
+}
+
 export default function C2CTransactionsPage() {
   const listRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
@@ -52,6 +61,7 @@ export default function C2CTransactionsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [slipTarget, setSlipTarget] = useState<C2CTransactionResponse | null>(null);
 
   const loadList = useCallback(async (query = search) => {
     const requestId = listRequestRef.current + 1;
@@ -207,14 +217,26 @@ export default function C2CTransactionsPage() {
               <>
                 <header className="c2c-detail-header"><div><span className={`c2c-direction ${detail.direction}`}>{detail.direction === "deposit" ? <ArrowDownLeft size={18} /> : <ArrowUpRight size={18} />}</span><div><h2 id="c2c-detail-title">{detail.orderId}</h2><p>{detail.referenceId || "ไม่มี Reference ID"}</p></div></div><span className={`c2c-status large ${c2cStatusTone(detail.transactionStatus)}`}>{detailLoading && <LoaderCircle className="spin" size={14} />}{c2cStatusLabel(detail.transactionStatus)}</span></header>
                 <div className="c2c-detail-amount"><span>{detail.direction === "deposit" ? "ยอดฝาก" : "ยอดถอน"}</span><strong>{currency.format(detail.amount)}</strong><p>{c2cStatusDescription(detail.transactionStatus)}</p></div>
+                {canAttachSlip(detail) && <div className="c2c-manual-alert"><UploadCloud size={19} /><span><strong>{detail.transactionStatus === "EXPIRED" ? "สลิปรอบก่อนไม่ผ่าน แนบใหม่ได้" : "รายการนี้จับคู่แล้วและยังรอสลิป"}</strong> แนบไฟล์กับรายการเดิมได้เลย ไม่ต้องสร้างรายการฝากใหม่</span></div>}
                 {detail.awaitingManualReview && <div className="c2c-manual-alert"><ShieldAlert size={19} /><span><strong>รายการนี้รอเจ้าหน้าที่โดยไม่มีเวลาปลดอัตโนมัติ</strong> ยอดที่ค้างยังถูกกันไว้ {currency.format(detail.heldAmount)}</span></div>}
                 <dl className="c2c-detail-facts"><div><dt>ค่าธรรมเนียมรวม</dt><dd>{currency.format(detail.feeAmount)}</dd></div><div><dt>ยอดที่สำเร็จแล้ว</dt><dd>{currency.format(detail.settledAmount)}</dd></div><div><dt>ยอดที่ยังถูกกัน</dt><dd>{currency.format(detail.heldAmount)}</dd></div><div><dt>เส้นตายที่ยังเดิน</dt><dd>{detail.matchDeadline ? dateTime.format(new Date(detail.matchDeadline)) : "ไม่มี"}</dd></div><div><dt>บัญชีปลายทาง</dt><dd>{detail.direction === "withdraw" ? "ไม่เปิดเผยสำหรับฝั่งถอน" : detail.transferTo ? "พร้อมสำหรับผู้โอนรายการนี้" : "ยังไม่จับคู่"}</dd></div><div><dt>Transaction ID</dt><dd>{detail.transactionId}</dd></div></dl>
                 <section className="c2c-parts" aria-labelledby="c2c-parts-title"><header><h3 id="c2c-parts-title">ส่วนของรายการ</h3><span>{detail.parts.length} ส่วน</span></header><div className="c2c-parts-table" role="table"><div className="c2c-parts-head" role="row"><span>Order ID</span><span>ยอด / ค่าธรรมเนียม</span><span>สถานะ</span></div>{detail.parts.map((part) => <div className="c2c-part-row" role="row" key={part.orderId}><span><strong>{part.orderId}</strong><small>{part.matchedAt ? `จับคู่ ${dateTime.format(new Date(part.matchedAt))}` : part.matchDeadline ? `รอถึง ${dateTime.format(new Date(part.matchDeadline))}` : part.cancelReason || "ไม่มีเวลาที่เดินอยู่"}</small></span><span><strong>{currency.format(part.amount)}</strong><small>ค่าธรรมเนียม {currency.format(part.feeAmount)}</small></span><span className={`c2c-status ${c2cStatusTone(part.transactionStatus)}`}>{c2cStatusLabel(part.transactionStatus)}</span></div>)}</div></section>
-                <div className="c2c-detail-actions"><button className="button secondary-button" onClick={() => void checkReference(detail.referenceId || detail.orderId)} disabled={detailLoading}><RefreshCcw className={detailLoading ? "spin" : ""} size={16} />ตรวจสถานะล่าสุด</button>{detail.transactionStatus === "PENDING" && <button className="button danger-outline-button" onClick={() => void cancelSelected()} disabled={cancelling}>{cancelling ? <LoaderCircle className="spin" size={16} /> : <XCircle size={16} />}ยกเลิกรายการ</button>}</div>
+                <div className="c2c-detail-actions"><button className="button secondary-button" onClick={() => void checkReference(detail.referenceId || detail.orderId)} disabled={detailLoading}><RefreshCcw className={detailLoading ? "spin" : ""} size={16} />ตรวจสถานะล่าสุด</button>{canAttachSlip(detail) && <button className="button deposit-button" onClick={() => setSlipTarget(detail)}><UploadCloud size={16} />แนบสลิป</button>}{detail.transactionStatus === "PENDING" && <button className="button danger-outline-button" onClick={() => void cancelSelected()} disabled={cancelling}>{cancelling ? <LoaderCircle className="spin" size={16} /> : <XCircle size={16} />}ยกเลิกรายการ</button>}</div>
               </>
             )}
           </section>
         </div>
+
+        {slipTarget && (
+          <C2CSlipUploadDialog
+            transaction={slipTarget}
+            onClose={() => setSlipTarget(null)}
+            onUploaded={() => {
+              // ผล GET คือข้อมูลอ้างอิงหลัก ดึงสถานะจริงกลับมาทันทีหลังส่งสลิป
+              void checkReference(slipTarget.referenceId || slipTarget.orderId);
+            }}
+          />
+        )}
 
         <div className="c2c-authority-note"><CheckCircle2 size={18} /><span><strong>สถานะจาก GET คือข้อมูลอ้างอิงหลัก</strong> ระบบ poll เฉพาะรายการที่กำลังเปิดดูทุก 10 วินาที เพื่อลดการชน rate limit และไม่พึ่ง callback เพียงครั้งเดียว</span></div>
       </div>

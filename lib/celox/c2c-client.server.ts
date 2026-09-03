@@ -2,7 +2,9 @@ import "server-only";
 
 import { createHash, createHmac } from "node:crypto";
 import { CeloxError } from "./client.server";
+import { isValidC2CUploadToken } from "./c2c-validation";
 import type {
+  C2CAttachSlipOptions,
   C2CDepositSlipResponse,
   C2CTransactionPart,
   C2CTransactionResponse,
@@ -22,6 +24,8 @@ const C2C_DEPOSIT_PATH = "/v1/core/c2c/deposits";
 const C2C_WITHDRAWAL_PATH = "/v1/core/c2c/withdrawals";
 const C2C_PATH = "/v1/core/c2c";
 const REQUEST_TIMEOUT_MS = 15_000;
+// อัปโหลดรูปสลิปกินเวลามากกว่า JSON ปกติ ใช้เพดานเดียวกับ proxy สลิปฝากปกติ
+const SLIP_UPLOAD_TIMEOUT_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 const BASE_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 4_000;
@@ -480,10 +484,13 @@ function isC2CDepositSlipResponse(
   transactionId: string,
 ): value is C2CDepositSlipResponse {
   if (!isRecord(value) || !isRecord(value.slipVerification)) return false;
-  const counterpartyValid = value.counterparty === null || (
-    isRecord(value.counterparty)
-    && isNonEmptyString(value.counterparty.transactionStatus)
-  );
+  // counterparty เป็นฟิลด์แบบมีเงื่อนไข: null เมื่อเข้าบัญชีกลาง และอาจไม่มีคีย์เลยเมื่อยังไม่มีคู่
+  const counterpartyValid = value.counterparty === null
+    || value.counterparty === undefined
+    || (
+      isRecord(value.counterparty)
+      && isNonEmptyString(value.counterparty.transactionStatus)
+    );
   return value.transactionId === transactionId
     && isNonEmptyString(value.orderId)
     && ["SUCCESS", "PENDING_APPROVE", "PENDING_TRANSFER", "EXPIRED"].includes(String(value.transactionStatus))
@@ -649,7 +656,11 @@ export function cancelC2CTransaction(transactionId: string) {
   });
 }
 
-export async function attachC2CDepositSlip(transactionId: string, file: File) {
+export async function attachC2CDepositSlip(
+  transactionId: string,
+  file: File,
+  options: C2CAttachSlipOptions = {},
+) {
   if (!UUID_PATTERN.test(transactionId)) {
     throw new CeloxError({
       code: "invalid_request",
@@ -657,23 +668,41 @@ export async function attachC2CDepositSlip(transactionId: string, file: File) {
       httpStatus: 400,
     });
   }
+  const uploadToken = options.uploadToken?.trim() ?? "";
+  if (uploadToken && !isValidC2CUploadToken(uploadToken)) {
+    throw new CeloxError({
+      code: "invalid_request",
+      message: "uploadToken ของรายการฝาก C2C ไม่ถูกต้อง",
+      httpStatus: 400,
+    });
+  }
+
   const config = getConfig();
   const path = `${C2C_DEPOSIT_PATH}/${transactionId}/slip`;
   const url = new URL(`${config.baseUrl}${path}`);
+  // ยืนยันตัวตนได้สองทาง เลือกทางเดียว: ถ้ามี uploadToken ให้ส่ง query อย่างเดียว
+  // และไม่ส่ง header ของ Celox เลย ถ้าไม่มีก็ลงลายเซ็นสามตัวตามปกติ
+  if (uploadToken) url.searchParams.set("uploadToken", uploadToken);
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    // สร้าง FormData ใหม่ทุกครั้งที่ลองใหม่ เพราะ body เดิมถูกอ่านไปแล้ว
+    // ปล่อยให้ fetch กำหนด boundary เอง ค่า boundary ใน header ต้องตรงกับ body จริง
+    // และบนเส้นทางนี้ลายเซ็นไม่ครอบคลุมไฟล์ (body hash = hash ของ body ว่าง) จึงไม่มีผลต่อการเซ็น
     const form = new FormData();
-    form.append("file", file, file.name);
+    form.append("file", file, file.name || "slip");
 
     let response: Response;
     try {
       response = await fetch(url, {
         method: "POST",
-        headers: signedHeaders(config, "POST", url.pathname, EMPTY_BODY_HASH),
+        headers: uploadToken
+          ? undefined
+          // ลายเซ็นครอบคลุมเมธอด path (ไม่รวม query) และเวลา แต่ไม่ครอบคลุมไฟล์
+          : signedHeaders(config, "POST", url.pathname, EMPTY_BODY_HASH),
         body: form,
         cache: "no-store",
         redirect: "error",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(SLIP_UPLOAD_TIMEOUT_MS),
       });
     } catch (cause) {
       const timedOut = cause instanceof DOMException
@@ -704,6 +733,7 @@ export async function attachC2CDepositSlip(transactionId: string, file: File) {
     const retryAfterMs = error.retryAfterSeconds === undefined
       ? jitteredBackoff(attempt)
       : error.retryAfterSeconds * 1_000;
+    // 429 เท่านั้นที่ลองใหม่ได้เอง 401 / 404 / 422 เป็นความผิดถาวรของคำขอนี้ ห้ามยิงซ้ำ
     const canRetry = error.code === "rate_limited"
       && attempt < MAX_ATTEMPTS - 1
       && retryAfterMs <= MAX_AUTOMATIC_RETRY_AFTER_MS;
