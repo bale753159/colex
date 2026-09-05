@@ -115,6 +115,56 @@ interface Driver {
 
 let driverPromise: Promise<Driver> | undefined;
 
+/**
+ * สร้าง pg.Pool พร้อมติด listener ให้ event "error"
+ *
+ * Pool เป็น EventEmitter — เมื่อ idle client ตัวใดในพูลเจอ network error (connection reset,
+ * pooler ของ Supabase ตัด idle backend ทิ้ง, สะดุดเครือข่ายชั่วคราว) พูลจะ emit "error" บนตัวมันเอง
+ * ถ้าไม่มี listener สักตัว Node จะโยน error นั้นทิ้งจน process ทั้งตัวล่มไปด้วย ไม่ใช่แค่ request
+ * ที่กำลังทำงานอยู่ — สำหรับ Next.js server ที่มีอายุยืนและคุยกับ pooler ที่ตัดการเชื่อมต่อได้ตลอด
+ * นี่คือเหตุการณ์ที่เกิดจริงในโปรดักชัน จึงต้อง log ไว้เพื่อวินิจฉัยแทนที่จะปล่อยให้ process ตาย
+ * หรือกลืน error แบบเงียบๆ (ซึ่งจะซ่อนปัญหาเครือข่ายที่ควรรู้)
+ */
+export function createPgPool(connectionString: string): Pool {
+  const pool = new Pool({ connectionString, max: 10 });
+  pool.on("error", (error) => {
+    console.error("pg.Pool เจอ error จาก idle client (connection หลุดที่พูล ไม่ใช่จาก query ที่กำลังรัน):", error);
+  });
+  return pool;
+}
+
+/**
+ * รันหนึ่ง transaction บน client ที่ยืมมาจากพูลแล้ว (BEGIN/COMMIT/ROLLBACK ด้วย client ตัวเดียวกัน
+ * ตลอด) แยกออกมาจาก createPgDriver เพื่อให้เทสต์ยิงเข้ากับ client จำลองได้โดยไม่ต้องมี Postgres จริง
+ */
+export async function runPgTransaction<T>(
+  client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number | null }> },
+  fn: (exec: Exec) => Promise<T>,
+): Promise<T> {
+  try {
+    // BEGIN เปล่าคือ READ COMMITTED ซึ่งเป็นค่าปกติของ Postgres และเป็นสิ่งที่ spec เลือกไว้
+    // guard predicate บวก row lock เพียงพอแล้ว ไม่ต้องใช้ SERIALIZABLE ซึ่งจะบังคับให้เขียน retry loop ทุกจุด
+    await client.query("BEGIN");
+    const scoped: Exec = async (sql, params) => {
+      const result = await client.query(toPositional(sql), params);
+      return { rows: result.rows as Row[], rowCount: result.rowCount ?? 0 };
+    };
+    const value = await fn(scoped);
+    await client.query("COMMIT");
+    return value;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      // ROLLBACK เองก็ล้มเหลวได้ (เช่น connection หลุดไปแล้ว) — ถ้าปล่อยให้ rollbackError
+      // นี้เป็นตัวที่ throw ออกไปเฉยๆ สาเหตุจริงที่ทำให้ transaction ล้ม (error เดิม) จะหายไป
+      // ทั้งที่นี่คือระบบเงิน การเสีย diagnostic ตรงนี้ยอมรับไม่ได้ จึงเก็บทั้งสอง error ไว้ด้วยกัน
+      throw new AggregateError([error, rollbackError], "transaction ล้มเหลว และ ROLLBACK ก็ล้มเหลวด้วย");
+    }
+    throw error;
+  }
+}
+
 async function createPgDriver(): Promise<Driver> {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
@@ -127,7 +177,7 @@ async function createPgDriver(): Promise<Driver> {
   pgTypes.setTypeParser(OID_NUMERIC, toSafeInt as (value: string) => number);
   pgTypes.setTypeParser(OID_TIMESTAMPTZ, toIsoString as (value: string) => string);
   pgTypes.setTypeParser(OID_TIMESTAMP, toIsoString as (value: string) => string);
-  const pool = new Pool({ connectionString, max: 10 });
+  const pool = createPgPool(connectionString);
 
   const exec: Exec = async (sql, params) => {
     const result = await pool.query(toPositional(sql), params);
@@ -144,19 +194,7 @@ async function createPgDriver(): Promise<Driver> {
     async transaction(fn) {
       const client = await pool.connect();
       try {
-        // BEGIN เปล่าคือ READ COMMITTED ซึ่งเป็นค่าปกติของ Postgres และเป็นสิ่งที่ spec เลือกไว้
-        // guard predicate บวก row lock เพียงพอแล้ว ไม่ต้องใช้ SERIALIZABLE ซึ่งจะบังคับให้เขียน retry loop ทุกจุด
-        await client.query("BEGIN");
-        const scoped: Exec = async (sql, params) => {
-          const result = await client.query(toPositional(sql), params);
-          return { rows: result.rows as Row[], rowCount: result.rowCount ?? 0 };
-        };
-        const value = await fn(scoped);
-        await client.query("COMMIT");
-        return value;
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
+        return await runPgTransaction(client, fn);
       } finally {
         client.release();
       }

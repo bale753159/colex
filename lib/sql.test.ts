@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { db, resetPoolForTests, toPositional, tx } from "./sql";
+import { createPgPool, db, resetPoolForTests, runPgTransaction, toPositional, tx } from "./sql";
 
 describe("toPositional", () => {
   it("แปลง ? เรียงเป็น $1 $2 ตามลำดับ", () => {
@@ -38,6 +38,64 @@ describe("toPositional", () => {
       VALUES (?, ?, ?)
     `;
     expect(toPositional(sql)).toContain("VALUES ($1, $2, $3)");
+  });
+});
+
+describe("createPgPool", () => {
+  it("ติด listener บน event error ของ pool ไว้ตั้งแต่สร้าง (กัน process ล่มเมื่อ idle client หลุดการเชื่อมต่อ)", () => {
+    // ไม่มี Postgres จริงในสภาพแวดล้อมนี้ แต่ pg.Pool ไม่เชื่อมต่อจริงจนกว่าจะมี query/connect()
+    // แรก ดังนั้นสร้าง pool เปล่าๆ แล้วเช็ค listener ได้โดยไม่ต้องมี network หรือ server จริง
+    const pool = createPgPool("postgres://user:pass@127.0.0.1:1/nonexistent");
+    try {
+      expect(pool.listenerCount("error")).toBeGreaterThan(0);
+    } finally {
+      void pool.end().catch(() => {});
+    }
+  });
+});
+
+describe("runPgTransaction", () => {
+  it("รักษา error เดิมไว้เมื่อ ROLLBACK สำเร็จ", async () => {
+    const queries: string[] = [];
+    const client = {
+      query: async (sql: string) => {
+        queries.push(sql);
+        if (sql === "ROLLBACK") return { rows: [], rowCount: 0 };
+        if (sql === "BEGIN") return { rows: [], rowCount: 0 };
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    await expect(
+      runPgTransaction(client, async () => {
+        throw new Error("จงใจล้มใน transaction");
+      }),
+    ).rejects.toThrow("จงใจล้มใน transaction");
+    expect(queries).toEqual(["BEGIN", "ROLLBACK"]);
+  });
+
+  it("ไม่กลืน error เดิมทิ้งเมื่อ ROLLBACK ล้มเหลวด้วย — ต้องเก็บทั้งสอง error ไว้", async () => {
+    const client = {
+      query: async (sql: string) => {
+        if (sql === "BEGIN") return { rows: [], rowCount: 0 };
+        if (sql === "ROLLBACK") throw new Error("ROLLBACK พัง เพราะ connection หลุดไปแล้ว");
+        return { rows: [], rowCount: 0 };
+      },
+    };
+
+    let caught: unknown;
+    try {
+      await runPgTransaction(client, async () => {
+        throw new Error("สาเหตุจริงที่ transaction ล้ม");
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AggregateError);
+    const aggregate = caught as AggregateError;
+    expect(aggregate.errors).toHaveLength(2);
+    expect((aggregate.errors[0] as Error).message).toBe("สาเหตุจริงที่ transaction ล้ม");
+    expect((aggregate.errors[1] as Error).message).toBe("ROLLBACK พัง เพราะ connection หลุดไปแล้ว");
   });
 });
 

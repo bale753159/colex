@@ -126,21 +126,33 @@ describe("schema", () => {
   });
 
   it("กันยอดถอนได้เกินยอดคงเหลือ", async () => {
-    await db.run(`
-      INSERT INTO customers (id, name, account, initials, color, balance_satang, withdrawable_satang, created_at)
-      VALUES ('C-NEG', 'ทดสอบ', 'ACC-NEG', 'ท', '#000000', 100, 100, now())`);
-    await expect(
-      db.run("UPDATE customers SET withdrawable_satang = 999 WHERE id = 'C-NEG'")
-    ).rejects.toThrow();
+    // fixture เป็นของเทสต์นี้เอง และลบทิ้งเองท้ายเทสต์ ไม่ปล่อยให้เทสต์อื่น (รวมถึง
+    // truncateAll ท้ายไฟล์) ต้องพึ่งพาหรือมาเก็บกวาดแทน — ลำดับการรันของเทสต์ในไฟล์นี้
+    // จึงไม่มีผลต่อกันอีกต่อไป
+    try {
+      await db.run(`
+        INSERT INTO customers (id, name, account, initials, color, balance_satang, withdrawable_satang, created_at)
+        VALUES ('C-NEG', 'ทดสอบ', 'ACC-NEG', 'ท', '#000000', 100, 100, now())`);
+      await expect(
+        db.run("UPDATE customers SET withdrawable_satang = 999 WHERE id = 'C-NEG'")
+      ).rejects.toThrow();
+    } finally {
+      await db.run("DELETE FROM customers WHERE id = 'C-NEG'");
+    }
   });
 
   it("กัน callback ซ้ำด้วย UNIQUE (transaction_id, provider_status)", async () => {
+    // เช่นเดียวกับเทสต์ก่อนหน้า: สร้างและลบ fixture ของตัวเอง ไม่ทิ้งแถวไว้ให้เทสต์อื่น
     const insert = `
       INSERT INTO celox_callback_events
         (transaction_id, order_id, provider_status, amount_satang, received_at, last_received_at)
       VALUES ('TX-1', 'OD-1', 'SUCCESS', 100, now(), now())`;
-    await db.run(insert);
-    await expect(db.run(insert)).rejects.toThrow();
+    try {
+      await db.run(insert);
+      await expect(db.run(insert)).rejects.toThrow();
+    } finally {
+      await db.run("DELETE FROM celox_callback_events WHERE transaction_id = 'TX-1'");
+    }
   });
 
   it("ตัดวันตามเวลาไทย ไม่ใช่ UTC", async () => {
@@ -150,8 +162,11 @@ describe("schema", () => {
     expect(row!.thai_date).toBe("2026-09-06");
   });
 
-  // ต้องอยู่ท้ายสุดของไฟล์เสมอ: truncateAll() ล้างข้อมูลทั้ง 10 ตาราง จึงลบ fixture
-  // (เช่นแถว C-NEG และแถวใน celox_callback_events) ที่เทสต์ก่อนหน้าพึ่งพาอยู่
+  // ไม่ต้องอยู่ท้ายสุดของไฟล์อีกต่อไป: ทุกเทสต์ในไฟล์นี้สร้างและลบ fixture ของตัวเอง
+  // (ดูเทสต์ "กันยอดถอนได้เกินยอดคงเหลือ" และ "กัน callback ซ้ำ" ด้านบน) จึงไม่มีแถวตกค้าง
+  // ให้ truncateAll() ต้องไปลบแทน และไม่มีเทสต์ไหนพึ่งพาผลข้างเคียงจาก truncate นี้ —
+  // แถวที่เทสต์นี้ตรวจสอบก็เป็นแถวที่มันแทรกเองทั้งหมด (TX-TRUNC / TX-TRUNC-2) การเรียง
+  // ลำดับเทสต์ในไฟล์นี้ใหม่จึงไม่กระทบผลลัพธ์อีกต่อไป
   it("truncateAll ล้างข้อมูลและรีเซ็ต identity sequence", async () => {
     await db.run(`
       INSERT INTO celox_callback_events
