@@ -81,6 +81,7 @@ export function toPositional(sql: string): string {
 }
 
 const OID_INT8 = 20;
+const OID_NUMERIC = 1700;
 const OID_TIMESTAMP = 1114;
 const OID_TIMESTAMPTZ = 1184;
 
@@ -114,6 +115,10 @@ async function createPgDriver(): Promise<Driver> {
     throw new Error("ไม่พบ DATABASE_URL กรุณาตั้งค่าการเชื่อมต่อ Supabase ใน .env.local");
   }
   pgTypes.setTypeParser(OID_INT8, toSafeInt as (value: string) => number);
+  // NUMERIC เกิดขึ้นเมื่อ SUM()/AVG() ทำงานกับคอลัมน์ bigint (เช่นยอดรวมเงิน) — โค้ดเบสนี้
+  // ไม่มีคอลัมน์ numeric ที่เป็นเศษส่วนจริง ทุกค่าเงินเป็นจำนวนเต็มสตางค์ ดังนั้นถ้าค่าที่ได้
+  // มีเศษส่วนจริงๆ ให้ toSafeInt โยน error แทนที่จะปัดเงียบๆ
+  pgTypes.setTypeParser(OID_NUMERIC, toSafeInt as (value: string) => number);
   pgTypes.setTypeParser(OID_TIMESTAMPTZ, toIsoString as (value: string) => string);
   pgTypes.setTypeParser(OID_TIMESTAMP, toIsoString as (value: string) => string);
   const pool = new Pool({ connectionString, max: 10 });
@@ -154,6 +159,7 @@ async function createPgliteDriver(): Promise<Driver> {
   const client = new PGlite({
     parsers: {
       [OID_INT8]: toSafeInt,
+      [OID_NUMERIC]: toSafeInt,
       [OID_TIMESTAMPTZ]: toIsoString,
       [OID_TIMESTAMP]: toIsoString,
     },

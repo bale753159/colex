@@ -118,4 +118,19 @@ describe("driver", () => {
       db.first("SELECT 9007199254740993::bigint AS n")
     ).rejects.toThrow(/เกินช่วงที่ปลอดภัย/);
   });
+
+  it("SUM(bigint) คืน number ไม่ใช่ string แม้ไม่มี ::bigint cast", async () => {
+    // ใช้ค่าที่ไม่ซ้ำกับเทสต์อื่นในไฟล์นี้ แล้วกรองด้วย WHERE เพื่อไม่ให้แถวจากเทสต์อื่น
+    // (ที่แชร์ตาราง sql_probe เดียวกัน) มากระทบผลรวม
+    const a = 543210;
+    const b = 111111;
+    const stamp = new Date().toISOString();
+    await db.run("INSERT INTO sql_probe (amount_satang, created_at) VALUES (?, ?)", [a, stamp]);
+    await db.run("INSERT INTO sql_probe (amount_satang, created_at) VALUES (?, ?)", [b, stamp]);
+    const row = await db.first<{ total: number }>(
+      "SELECT COALESCE(SUM(amount_satang), 0) AS total FROM sql_probe WHERE amount_satang IN (?, ?)",
+      [a, b]);
+    expect(typeof row!.total).toBe("number");
+    expect(row!.total).toBe(a + b);
+  });
 });
