@@ -17,11 +17,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isReservationReferenceConflict(error: unknown) {
-  return error instanceof Error
-    && "code" in error
-    && error.code === "SQLITE_CONSTRAINT_UNIQUE"
-    && error.message.includes("celox_withdrawal_reservations.reference_id");
+// Postgres ใส่ SQLSTATE ไว้ที่ property `code` ของ error (ยืนยันแล้วทั้งจาก `pg` และ PGlite)
+// 23505 = unique_violation และชื่อ constraint ที่ชนคือ `celox_withdrawal_reservations_reference_id_key`
+// (auto-generate จาก `reference_id text UNIQUE` ใน supabase/migrations/0001_init.sql)
+// เดิมเช็ค SQLITE_CONSTRAINT_UNIQUE ซึ่งไม่มีทาง match ภายใต้ Postgres — ทำให้ referenceId
+// ซ้ำตกไปที่ persistence_error (500) แทนที่จะเป็น reference_id_conflict (409) ที่ตั้งใจไว้
+export function isReservationReferenceConflict(error: unknown) {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return error.code === "23505"
+    && "constraint" in error
+    && error.constraint === "celox_withdrawal_reservations_reference_id_key";
 }
 
 function errorResponse(

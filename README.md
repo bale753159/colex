@@ -49,7 +49,7 @@ C2C ของ Celox บันทึก local ledger เป็น `pending` ก�
 - `POST /api/customers/{id}/celox-withdrawal-holds/{key}/resolve` แก้ reservation/confirmation ที่ค้าง หลังผู้ดูแลตรวจสถานะจริงใน Celox Console แล้ว
 - `POST /api/celox/withdrawals` สร้างรายการถอน Celox สถานะ `PENDING`
 - `POST /api/celox/withdrawals/{id}/confirm` ยืนยันรายการด้วย payload ชุดเดิมและจ่ายเงินจริง
-- `GET /api/celox/c2c` รายการ C2C ที่ผูกกับลูกค้าใน SQLite
+- `GET /api/celox/c2c` รายการ C2C ที่ผูกกับลูกค้าใน Postgres
 - `POST /api/celox/c2c/deposits` สร้างรายการฝาก C2C
 - `POST /api/celox/c2c/deposits/{id}/slip` แนบสลิป C2C ด้วย signed multipart ฝั่ง server
 - `POST /api/celox/c2c/withdrawals` สร้างรายการถอน C2C และกันยอดลูกค้า
@@ -77,7 +77,7 @@ CELOX_CALLBACK_SECRET=your-plaintext-client-secret
 
 เปิดหน้า `/` แล้วกด “ฝากเงิน” หรือเปิด `/customers` → “ทำรายการใหม่” → “ฝากผ่าน Celox” ระบบจะทำงานตามลำดับนี้:
 
-1. ส่งข้อมูลผู้โอนและ `customerId` ภายในระบบไปที่ BFF `/api/celox/deposits`; BFF จะตัด `customerId` ออกก่อนส่ง payload ไป Celox และเก็บการผูกลูกค้าไว้ใน SQLite
+1. ส่งข้อมูลผู้โอนและ `customerId` ภายในระบบไปที่ BFF `/api/celox/deposits`; BFF จะตัด `customerId` ออกก่อนส่ง payload ไป Celox และเก็บการผูกลูกค้าไว้ใน Postgres
 2. ฝั่ง server serialize JSON หนึ่งครั้ง ใช้ bytes เดียวกันสำหรับ SHA-256, HMAC และ request body
 3. เมื่อ Create สำเร็จ ระบบสร้างแถวใน `transactions` เป็น `pending` ทันทีโดยยังไม่เพิ่มยอด แล้วแสดงบัญชีรับเงินจาก response สถานะ `PENDING_TRANSFER`
 4. browser แสดง preview แล้วส่ง `FormData` เข้า BFF ภายใน `/api/celox/deposits/{id}/slip` เพื่อหลีกเลี่ยง CORS
@@ -147,7 +147,7 @@ Celox เป็นฝ่าย `POST` เข้ามา ระบบนี้�
 2. ตรวจ required fields ทั้งหมด รวม `referenceId` และ `occurredAt` ที่ต้องมี key แม้ค่าเป็น `null`
 3. บันทึก event ลง `celox_callback_events` ก่อนตอบ `200` โดยใช้ `(transactionId, status)` เป็น idempotency key
 4. ตอบ `{ "received": true, "duplicate": false }` ทันที แล้วใช้ `after()` ของ Next.js ประมวลผล ledger ภายหลัง
-5. Callback `SUCCESS` จะจับคู่ `transactionId` แล้วอัปเดต transaction ฝากแถวเดิมเป็น `success` พร้อมเพิ่มยอดใน SQLite transaction เดียว หากผลสลิปบันทึกสำเร็จไปแล้วจะไม่เปลี่ยนยอดซ้ำ
+5. Callback `SUCCESS` จะจับคู่ `transactionId` แล้วอัปเดต transaction ฝากแถวเดิมเป็น `success` พร้อมเพิ่มยอดใน Postgres transaction เดียว หากผลสลิปบันทึกสำเร็จไปแล้วจะไม่เปลี่ยนยอดซ้ำ
 6. Callback สถานะจบแบบไม่สำเร็จ เช่น `FAILED` หรือ `EXPIRED` จะเปลี่ยน transaction ฝากที่ยังรอเป็น `failed` โดยไม่เพิ่มยอด; Callback ที่ยังไม่พบรายการ ข้อมูลไม่ตรง หรือประมวลผลไม่สำเร็จจะคงอยู่ใน inbox เพื่อดูและ retry จากปุ่ม “Callback” ในหน้า `/customers`
 
 `CELOX_CALLBACK_SECRET` ใช้ตรวจลายเซ็น หากเว้นว่างระบบจะ fallback ไป `CELOX_CLIENT_SECRET` แต่ production ควรกำหนดให้ชัดเจน การตรวจลายเซ็นถูกบังคับเพราะ Callback `SUCCESS` สามารถเพิ่มยอดเงินจริงได้
@@ -249,7 +249,7 @@ Client อยู่ที่ `lib/celox/c2c-client.server.ts` และใช้
 - JSON ถูก `JSON.stringify` ครั้งเดียว แล้วใช้ string เดียวกันสำหรับ SHA-256 และ request body
 - canonical path ใช้ `url.pathname` เต็มของ staging เช่น `/api/celox/v1/core/c2c/deposits` จากการตรวจจริง: เซ็นเฉพาะ `/v1/core/c2c/...` จะได้ 401 แต่ path เต็มผ่าน authentication
 - GET, cancel และ multipart ใช้ SHA-256 ของ body ว่าง; multipart ไม่เอา bytes ของไฟล์เข้า signature
-- ฝั่งฝากบันทึก `transferTo` ไว้เฉพาะ state ของ dialog ขณะโอน ไม่เก็บบัญชีบุคคลที่สามลง SQLite และหน้า C2C แสดงเพียงว่าบัญชีพร้อมหรือไม่
+- ฝั่งฝากบันทึก `transferTo` ไว้เฉพาะ state ของ dialog ขณะโอน ไม่เก็บบัญชีบุคคลที่สามลง Postgres และหน้า C2C แสดงเพียงว่าบัญชีพร้อมหรือไม่
 
 ### ตัวอย่างที่รันได้
 
@@ -327,7 +327,7 @@ https://YOUR_NGROK_DOMAIN/api/celox/callback
 4. commit ลง durable inbox `celox_c2c_callback_events` ด้วย idempotency key `(transactionId, status)` ก่อนตอบ HTTP 200
 5. ประมวลผล ledger หลัง response ผ่าน `after()`: `PENDING_TRANSFER` อัปเดตสถานะ, `SUCCESS` ปิดยอด exact-once, `EXPIRED`/`CANCELLED` ปิดรายการและคืนยอดถอนที่พักไว้
 
-`event` ใช้เก็บประกอบการตรวจสอบเท่านั้น การตัดสินใจทุกเส้นทางยึด `status` ข้อมูล `transferTo` ไม่ถูกเก็บลง SQLite หรือ log; inbox เก็บเฉพาะ SHA-256 ของ canonical signed payload เพื่อจับ payload conflict โดยไม่เปิดเผยบัญชีบุคคลที่สาม
+`event` ใช้เก็บประกอบการตรวจสอบเท่านั้น การตัดสินใจทุกเส้นทางยึด `status` ข้อมูล `transferTo` ไม่ถูกเก็บลง Postgres หรือ log; inbox เก็บเฉพาะ SHA-256 ของ canonical signed payload เพื่อจับ payload conflict โดยไม่เปิดเผยบัญชีบุคคลที่สาม
 
 ตัวอย่าง Callback ที่รันได้เมื่อ dev server เปิดอยู่ (เปลี่ยน ID ให้ตรงกับรายการ C2C จริงหากต้องการให้ ledger ถูกอัปเดต):
 
