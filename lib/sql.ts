@@ -103,6 +103,12 @@ type Exec = (sql: string, params: unknown[]) => Promise<{ rows: Row[]; rowCount:
 
 interface Driver {
   exec: Exec;
+  /**
+   * รัน SQL หลายคำสั่งในสตริงเดียว (เช่นไฟล์ migration) ผ่าน simple-query protocol
+   * ของแต่ละ driver แทน exec() ซึ่งใช้ extended-query protocol และไม่รองรับ
+   * หลายคำสั่งในคำขอเดียวเมื่อมี parameter (แม้ params จะว่างเปล่าก็ตาม)
+   */
+  script(sql: string): Promise<void>;
   transaction<T>(fn: (exec: Exec) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
@@ -130,6 +136,11 @@ async function createPgDriver(): Promise<Driver> {
 
   return {
     exec,
+    // pool.query(text) แบบไม่มี values argument ใช้ simple-query protocol ของ Postgres
+    // ซึ่งรองรับหลายคำสั่งในสตริงเดียว (ต่างจาก exec() ที่ส่ง params เสมอ)
+    script: async (sql) => {
+      await pool.query(sql);
+    },
     async transaction(fn) {
       const client = await pool.connect();
       try {
@@ -177,6 +188,11 @@ async function createPgliteDriver(): Promise<Driver> {
 
   return {
     exec: execWith(client),
+    // client.exec() ของ PGlite รองรับหลายคำสั่งในสตริงเดียวโดยตรง (ต่างจาก query()
+    // ซึ่งใช้ extended-query protocol เหมือน pg)
+    script: async (sql) => {
+      await client.exec(sql);
+    },
     async transaction(fn) {
       return client.transaction(async (t) => fn(execWith(t))) as Promise<never>;
     },
@@ -210,10 +226,14 @@ function wrap(exec: Exec): Queryable {
   };
 }
 
-export const db: Queryable = {
+export const db: Queryable & { script(sql: string): Promise<void> } = {
   query: async (sql, params) => wrap((await getDriver()).exec).query(sql, params),
   first: async (sql, params) => wrap((await getDriver()).exec).first(sql, params),
   run: async (sql, params) => wrap((await getDriver()).exec).run(sql, params),
+  // ใช้สำหรับรัน SQL หลายคำสั่งเป็นก้อนเดียว (เช่นไฟล์ migration) — ดูคอมเมนต์ที่ Driver.script
+  script: async (sql) => {
+    await (await getDriver()).script(sql);
+  },
 };
 
 export async function tx<T>(fn: (t: Tx) => Promise<T>): Promise<T> {
