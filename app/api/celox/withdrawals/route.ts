@@ -117,7 +117,7 @@ export async function POST(request: Request) {
     : { ...validation.input, referenceId: `KLANG-WD-${randomUUID()}` };
 
   try {
-    if (!customerExists(customerId)) {
+    if (!await customerExists(customerId)) {
       return errorResponse(422, {
         error: "ไม่พบข้อมูลลูกค้าที่เลือกรายการถอน",
         code: "validation_failed",
@@ -134,7 +134,7 @@ export async function POST(request: Request) {
 
   let reservationId: string;
   try {
-    reservationId = reserveCeloxWithdrawalFunds({
+    reservationId = await reserveCeloxWithdrawalFunds({
       customerId,
       request: providerInput,
     });
@@ -163,7 +163,7 @@ export async function POST(request: Request) {
   try {
     const withdrawal = await createWithdrawal(providerInput);
     try {
-      recordCeloxWithdrawalIntent({
+      await recordCeloxWithdrawalIntent({
         reservationId,
         customerId,
         request: providerInput,
@@ -171,7 +171,7 @@ export async function POST(request: Request) {
       });
     } catch {
       try {
-        markCeloxWithdrawalReservationUncertain(reservationId);
+        await markCeloxWithdrawalReservationUncertain(reservationId);
       } catch {
         // The reservation remains held even if its diagnostic state cannot be updated.
       }
@@ -194,8 +194,8 @@ export async function POST(request: Request) {
         "invalid_response",
       ].includes(error.code);
       try {
-        if (uncertain) markCeloxWithdrawalReservationUncertain(reservationId);
-        else releaseCeloxWithdrawalReservation(reservationId);
+        if (uncertain) await markCeloxWithdrawalReservationUncertain(reservationId);
+        else await releaseCeloxWithdrawalReservation(reservationId);
       } catch {
         return errorResponse(500, {
           error: "จัดการยอดที่กันไว้หลัง Celox ตอบกลับไม่สำเร็จ กรุณาตรวจสอบก่อนสร้างรายการซ้ำ",
@@ -215,7 +215,7 @@ export async function POST(request: Request) {
     }
 
     try {
-      markCeloxWithdrawalReservationUncertain(reservationId);
+      await markCeloxWithdrawalReservationUncertain(reservationId);
     } catch {
       // Keep the original error response; the reserved funds remain unavailable.
     }

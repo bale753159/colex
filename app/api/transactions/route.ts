@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const direction = url.searchParams.get("direction");
-  const result = listTransactions({
+  const result = await listTransactions({
     search: url.searchParams.get("search") ?? undefined,
     direction: direction === "deposit" || direction === "withdraw" ? direction as TransactionDirection : undefined,
     limit: Number(url.searchParams.get("limit") ?? 50),
@@ -17,7 +17,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const input = await request.json() as CreateTransactionInput;
-    const result = createTransaction(input);
+    const result = await createTransaction(input);
     return Response.json(result, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "ไม่สามารถบันทึกรายการได้";

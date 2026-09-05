@@ -13,7 +13,7 @@ export async function POST(
   try {
     const result = await cancelC2CTransaction(id);
     try {
-      recordCeloxC2CCancelResult(result);
+      await recordCeloxC2CCancelResult(result);
     } catch {
       return jsonError(500, {
         error: "Celox ยกเลิกรายการแล้ว แต่ระบบปรับยอดที่กันไว้ไม่สำเร็จ กรุณาตรวจสอบก่อนทำรายการใหม่",

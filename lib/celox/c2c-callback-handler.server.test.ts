@@ -1,12 +1,9 @@
 import { randomUUID, createHmac } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { setupTestDatabase, teardownTestDatabase } from "@/test/pg-harness";
 import type { CeloxC2CCallbackRequest } from "./types";
 
 const TEST_SECRET = "test-c2c-callback-secret";
-let tempDir: string;
 let acceptCeloxC2CCallbackPayload: typeof import("./c2c-callback-handler.server")["acceptCeloxC2CCallbackPayload"];
 
 function canonicalFixture(payload: CeloxC2CCallbackRequest) {
@@ -50,14 +47,13 @@ function withdrawalCallback(overrides: Partial<CeloxC2CCallbackRequest> = {}): C
 }
 
 beforeAll(async () => {
-  tempDir = mkdtempSync(join(tmpdir(), "c2c-callback-test-"));
-  process.env.KLANG_DB_PATH = join(tempDir, "finance.sqlite");
+  await setupTestDatabase();
   process.env.CELOX_C2C_CALLBACK_SECRET = TEST_SECRET;
   ({ acceptCeloxC2CCallbackPayload } = await import("./c2c-callback-handler.server"));
 });
 
-afterAll(() => {
-  rmSync(tempDir, { recursive: true, force: true });
+afterAll(async () => {
+  await teardownTestDatabase();
 });
 
 describe("acceptCeloxC2CCallbackPayload", () => {

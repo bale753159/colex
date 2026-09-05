@@ -64,7 +64,7 @@ export async function POST(request: Request) {
   };
   let reservationId: string;
   try {
-    reservationId = reserveCeloxC2CWithdrawalFunds({
+    reservationId = await reserveCeloxC2CWithdrawalFunds({
       customerId: validation.customerId,
       request: providerRequest,
     });
@@ -79,14 +79,14 @@ export async function POST(request: Request) {
   try {
     const withdrawal = await createC2CWithdrawal(providerRequest);
     try {
-      recordCeloxC2CWithdrawalIntent({
+      await recordCeloxC2CWithdrawalIntent({
         reservationId,
         customerId: validation.customerId,
         request: providerRequest,
         withdrawal,
       });
     } catch {
-      markCeloxC2CWithdrawalReservationUncertain(reservationId);
+      await markCeloxC2CWithdrawalReservationUncertain(reservationId);
       return jsonError(500, {
         error: "Celox สร้างรายการถอน C2C แล้ว แต่ระบบบันทึกการผูกลูกค้าไม่สำเร็จ ห้ามสร้างซ้ำ",
         code: "persistence_error",
@@ -102,8 +102,8 @@ export async function POST(request: Request) {
       const uncertain = ["request_timeout", "network_error", "invalid_response", "upstream_error"]
         .includes(error.code);
       try {
-        if (uncertain) markCeloxC2CWithdrawalReservationUncertain(reservationId);
-        else releaseCeloxC2CWithdrawalReservation(reservationId);
+        if (uncertain) await markCeloxC2CWithdrawalReservationUncertain(reservationId);
+        else await releaseCeloxC2CWithdrawalReservation(reservationId);
       } catch {
         return jsonError(500, {
           error: "ปรับยอดที่กันไว้หลัง Celox ตอบกลับไม่สำเร็จ ต้องตรวจสอบก่อนทำรายการใหม่",
@@ -114,7 +114,7 @@ export async function POST(request: Request) {
       return celoxErrorResponse(error);
     }
     try {
-      markCeloxC2CWithdrawalReservationUncertain(reservationId);
+      await markCeloxC2CWithdrawalReservationUncertain(reservationId);
     } catch {
       // คง error หลักไว้ และไม่คืนยอดเพราะไม่ทราบว่าฝั่ง Celox สร้างรายการแล้วหรือไม่
     }

@@ -58,7 +58,7 @@ function sleep(milliseconds: number) {
 export async function processCeloxCallbackEventWithRetry(eventId: number) {
   for (let attempt = 0; attempt < MAX_PROCESSING_ATTEMPTS; attempt += 1) {
     try {
-      return processCeloxCallbackEvent(eventId);
+      return await processCeloxCallbackEvent(eventId);
     } catch (error) {
       const canRetry = isRetryableSqliteError(error) && attempt < MAX_PROCESSING_ATTEMPTS - 1;
       if (canRetry) {
@@ -67,7 +67,7 @@ export async function processCeloxCallbackEventWithRetry(eventId: number) {
         continue;
       }
       try {
-        markCeloxCallbackEventFailed(eventId, errorMessage(error), attempt + 1);
+        await markCeloxCallbackEventFailed(eventId, errorMessage(error), attempt + 1);
       } catch (markError) {
         console.error("บันทึกสถานะ callback ที่ประมวลผลไม่สำเร็จไม่ได้", markError);
       }

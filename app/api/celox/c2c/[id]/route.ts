@@ -13,7 +13,7 @@ export async function GET(
   try {
     const transaction = await checkC2CTransaction(id);
     try {
-      syncCeloxC2CTransaction(transaction);
+      await syncCeloxC2CTransaction(transaction);
     } catch {
       return jsonError(500, {
         error: "อ่านสถานะ C2C จาก Celox ได้แล้ว แต่ปรับยอดและบันทึกสถานะในระบบไม่สำเร็จ",

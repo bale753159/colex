@@ -102,7 +102,7 @@ export async function POST(
   }
 
   try {
-    const intent = getCeloxC2CIntent(id);
+    const intent = await getCeloxC2CIntent(id);
     if (!intent || intent.direction !== "deposit") {
       return jsonError(404, {
         error: "ไม่พบรายการฝาก C2C นี้ในระบบ",
@@ -134,7 +134,7 @@ export async function POST(
   try {
     const result = await attachC2CDepositSlip(id, file, { uploadToken });
     try {
-      recordCeloxC2CSlipResult(result);
+      await recordCeloxC2CSlipResult(result);
     } catch {
       return jsonError(500, {
         error: "Celox ตรวจสลิปแล้ว แต่ระบบบันทึกผลและปรับยอดไม่สำเร็จ กรุณาตรวจสถานะก่อนแนบซ้ำ",

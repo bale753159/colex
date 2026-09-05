@@ -110,9 +110,9 @@ export async function POST(
     });
   }
 
-  let intent: ReturnType<typeof getCeloxDepositIntent>;
+  let intent: Awaited<ReturnType<typeof getCeloxDepositIntent>>;
   try {
-    intent = getCeloxDepositIntent(id);
+    intent = await getCeloxDepositIntent(id);
   } catch {
     return errorResponse(500, {
       error: "อ่านข้อมูลรายการฝากในระบบไม่สำเร็จ จึงยังไม่ได้ส่งสลิปไป Celox",
@@ -218,7 +218,7 @@ export async function POST(
   }
 
   try {
-    if (!claimCeloxDepositSlipSubmission(id)) {
+    if (!await claimCeloxDepositSlipSubmission(id)) {
       return errorResponse(409, {
         error: "รายการนี้กำลังส่งหรือเคยส่งสลิปแล้ว ระบบจะไม่ส่งไฟล์ซ้ำ",
         code: "slip_already_submitted",
@@ -271,7 +271,7 @@ export async function POST(
 
   if (!response.ok) {
     try {
-      releaseCeloxDepositSlipSubmission(id);
+      await releaseCeloxDepositSlipSubmission(id);
     } catch {
       return errorResponse(500, {
         error: "Celox ปฏิเสธสลิปแล้ว แต่ระบบปลดล็อกรายการไม่สำเร็จ ต้องตรวจสอบก่อนลองใหม่",
@@ -290,7 +290,7 @@ export async function POST(
       });
     }
     try {
-      recordCeloxDepositResult(payload);
+      await recordCeloxDepositResult(payload);
     } catch {
       return errorResponse(500, {
         error: payload.transactionStatus === "SUCCESS"

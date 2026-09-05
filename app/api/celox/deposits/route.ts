@@ -195,7 +195,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    if (!customerExists(validation.customerId)) {
+    if (!await customerExists(validation.customerId)) {
       return errorResponse(422, {
         error: "ไม่พบข้อมูลลูกค้าที่เลือกรับยอดฝาก",
         code: "validation_failed",
@@ -213,7 +213,7 @@ export async function POST(request: Request) {
   try {
     const deposit = await createDeposit(validation.input);
     try {
-      recordCeloxDepositIntent({
+      await recordCeloxDepositIntent({
         customerId: validation.customerId,
         deposit,
       });
