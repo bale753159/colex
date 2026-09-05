@@ -127,9 +127,9 @@ export async function POST(
     });
   }
 
-  let intent: ReturnType<typeof getCeloxWithdrawalIntent>;
+  let intent: Awaited<ReturnType<typeof getCeloxWithdrawalIntent>>;
   try {
-    intent = getCeloxWithdrawalIntent(id);
+    intent = await getCeloxWithdrawalIntent(id);
   } catch {
     return errorResponse(500, {
       error: "อ่านรายการถอนที่ผูกกับลูกค้าไม่สำเร็จ",
@@ -170,7 +170,7 @@ export async function POST(
       retryable: false,
     });
   }
-  const claim = claimCeloxWithdrawalConfirmation(id);
+  const claim = await claimCeloxWithdrawalConfirmation(id);
   if (claim !== "claimed") {
     return errorResponse(claim === "insufficient" ? 422 : 409, {
       error: claim === "insufficient"
@@ -184,10 +184,10 @@ export async function POST(
   try {
     const withdrawal = await confirmWithdrawal(id, intent.request);
     try {
-      recordCeloxWithdrawalResult(withdrawal);
+      await recordCeloxWithdrawalResult(withdrawal);
     } catch {
       try {
-        markCeloxWithdrawalConfirmationUncertain(id);
+        await markCeloxWithdrawalConfirmationUncertain(id);
       } catch {
         // The confirmation claim remains held if its diagnostic state cannot be updated.
       }
@@ -211,8 +211,8 @@ export async function POST(
         "invalid_transaction_state",
       ].includes(error.code);
       try {
-        if (uncertain) markCeloxWithdrawalConfirmationUncertain(id);
-        else releaseCeloxWithdrawalConfirmationClaim(id);
+        if (uncertain) await markCeloxWithdrawalConfirmationUncertain(id);
+        else await releaseCeloxWithdrawalConfirmationClaim(id);
       } catch {
         return errorResponse(500, {
           error: "บันทึกสถานะการยืนยันรายการถอนไม่สำเร็จ กรุณาตรวจสอบก่อนส่งซ้ำ",
@@ -232,7 +232,7 @@ export async function POST(
     }
 
     try {
-      markCeloxWithdrawalConfirmationUncertain(id);
+      await markCeloxWithdrawalConfirmationUncertain(id);
     } catch {
       // Keep the original response; the claim and reserved funds remain held.
     }

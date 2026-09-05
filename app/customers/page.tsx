@@ -496,7 +496,7 @@ export default function CustomersPage() {
             {!loading && loadError && <div className="customer-empty error"><Search size={24} /><strong>{loadError}</strong><button onClick={() => loadCustomers()}>ลองอีกครั้ง</button></div>}
             {!loading && !loadError && !data?.customers.length && <div className="customer-empty"><UserRound size={25} /><strong>ไม่พบลูกค้าที่ค้นหา</strong><span>ลองเปลี่ยนคำค้นหาหรือช่วงวันที่</span></div>}
           </div>
-          <div className="table-footer"><span>แสดง {data?.customers.length ?? 0} รายการ</span><span>ข้อมูลยอดเงินมาจาก SQLite</span></div>
+          <div className="table-footer"><span>แสดง {data?.customers.length ?? 0} รายการ</span><span>ข้อมูลยอดเงินมาจาก Supabase</span></div>
         </section>
       </div>
 

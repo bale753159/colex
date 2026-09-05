@@ -53,7 +53,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    if (!customerExists(validation.customerId)) {
+    if (!await customerExists(validation.customerId)) {
       return jsonError(422, {
         error: "ไม่พบลูกค้าที่เลือกรับยอดฝาก C2C",
         code: "validation_failed",
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
   try {
     const deposit = await createC2CDeposit(validation.input);
     try {
-      recordCeloxC2CDepositIntent({ customerId: validation.customerId, deposit });
+      await recordCeloxC2CDepositIntent({ customerId: validation.customerId, deposit });
     } catch {
       return jsonError(500, {
         error: "Celox สร้างรายการฝาก C2C แล้ว แต่ระบบบันทึกการผูกลูกค้าไม่สำเร็จ ห้ามสร้างซ้ำ",

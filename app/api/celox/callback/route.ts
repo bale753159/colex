@@ -71,9 +71,9 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse(422, "ข้อมูล Callback ไม่ครบหรือมีรูปแบบไม่ถูกต้อง", "validation_failed");
   }
 
-  let queued: ReturnType<typeof enqueueCeloxCallbackEvent>;
+  let queued: Awaited<ReturnType<typeof enqueueCeloxCallbackEvent>>;
   try {
-    queued = enqueueCeloxCallbackEvent(payload);
+    queued = await enqueueCeloxCallbackEvent(payload);
   } catch {
     return errorResponse(503, "บันทึก Callback ลงระบบไม่สำเร็จ", "persistence_error");
   }

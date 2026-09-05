@@ -38,7 +38,7 @@ export async function POST(
   }
 
   const { id, key } = await params;
-  if (!id || id.length > 100 || !key || key.length > 100 || !customerExists(id)) {
+  if (!id || id.length > 100 || !key || key.length > 100 || !await customerExists(id)) {
     return Response.json({ error: "ไม่พบยอดพักถอนของลูกค้ารายนี้" }, { status: 404 });
   }
 
@@ -72,7 +72,7 @@ export async function POST(
   }
 
   try {
-    resolveCeloxWithdrawalHold({ customerId: id, key, action });
+    await resolveCeloxWithdrawalHold({ customerId: id, key, action });
   } catch (error) {
     const message = error instanceof Error ? error.message : "แก้ยอดพักถอนไม่สำเร็จ";
     return Response.json({ error: message }, { status: 409 });
@@ -80,8 +80,8 @@ export async function POST(
 
   const body = {
     customerId: id,
-    callbacks: listCustomerCeloxCallbacks(id, 10),
-    withdrawalHolds: listCustomerCeloxWithdrawalHolds(id),
+    callbacks: await listCustomerCeloxCallbacks(id, 10),
+    withdrawalHolds: await listCustomerCeloxWithdrawalHolds(id),
   } satisfies CustomerCeloxCallbacksResponse;
   return Response.json(body, { headers: { "Cache-Control": "no-store" } });
 }

@@ -17,11 +17,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isReservationReferenceConflict(error: unknown) {
-  return error instanceof Error
-    && "code" in error
-    && error.code === "SQLITE_CONSTRAINT_UNIQUE"
-    && error.message.includes("celox_withdrawal_reservations.reference_id");
+// Postgres ใส่ SQLSTATE ไว้ที่ property `code` ของ error (ยืนยันแล้วทั้งจาก `pg` และ PGlite)
+// 23505 = unique_violation และชื่อ constraint ที่ชนคือ `celox_withdrawal_reservations_reference_id_key`
+// (auto-generate จาก `reference_id text UNIQUE` ใน supabase/migrations/0001_init.sql)
+// เดิมเช็ค SQLITE_CONSTRAINT_UNIQUE ซึ่งไม่มีทาง match ภายใต้ Postgres — ทำให้ referenceId
+// ซ้ำตกไปที่ persistence_error (500) แทนที่จะเป็น reference_id_conflict (409) ที่ตั้งใจไว้
+export function isReservationReferenceConflict(error: unknown) {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return error.code === "23505"
+    && "constraint" in error
+    && error.constraint === "celox_withdrawal_reservations_reference_id_key";
 }
 
 function errorResponse(
@@ -117,7 +122,7 @@ export async function POST(request: Request) {
     : { ...validation.input, referenceId: `KLANG-WD-${randomUUID()}` };
 
   try {
-    if (!customerExists(customerId)) {
+    if (!await customerExists(customerId)) {
       return errorResponse(422, {
         error: "ไม่พบข้อมูลลูกค้าที่เลือกรายการถอน",
         code: "validation_failed",
@@ -134,7 +139,7 @@ export async function POST(request: Request) {
 
   let reservationId: string;
   try {
-    reservationId = reserveCeloxWithdrawalFunds({
+    reservationId = await reserveCeloxWithdrawalFunds({
       customerId,
       request: providerInput,
     });
@@ -163,7 +168,7 @@ export async function POST(request: Request) {
   try {
     const withdrawal = await createWithdrawal(providerInput);
     try {
-      recordCeloxWithdrawalIntent({
+      await recordCeloxWithdrawalIntent({
         reservationId,
         customerId,
         request: providerInput,
@@ -171,7 +176,7 @@ export async function POST(request: Request) {
       });
     } catch {
       try {
-        markCeloxWithdrawalReservationUncertain(reservationId);
+        await markCeloxWithdrawalReservationUncertain(reservationId);
       } catch {
         // The reservation remains held even if its diagnostic state cannot be updated.
       }
@@ -194,8 +199,8 @@ export async function POST(request: Request) {
         "invalid_response",
       ].includes(error.code);
       try {
-        if (uncertain) markCeloxWithdrawalReservationUncertain(reservationId);
-        else releaseCeloxWithdrawalReservation(reservationId);
+        if (uncertain) await markCeloxWithdrawalReservationUncertain(reservationId);
+        else await releaseCeloxWithdrawalReservation(reservationId);
       } catch {
         return errorResponse(500, {
           error: "จัดการยอดที่กันไว้หลัง Celox ตอบกลับไม่สำเร็จ กรุณาตรวจสอบก่อนสร้างรายการซ้ำ",
@@ -215,7 +220,7 @@ export async function POST(request: Request) {
     }
 
     try {
-      markCeloxWithdrawalReservationUncertain(reservationId);
+      await markCeloxWithdrawalReservationUncertain(reservationId);
     } catch {
       // Keep the original error response; the reserved funds remain unavailable.
     }

@@ -30,14 +30,14 @@ export async function POST(
   }
 
   try {
-    queueCeloxCallbackRetry(eventId, id);
+    await queueCeloxCallbackRetry(eventId, id);
   } catch (error) {
     const message = error instanceof Error ? error.message : "ไม่พบ Callback ของลูกค้ารายนี้";
     return Response.json({ error: message }, { status: 404 });
   }
 
   await processCeloxCallbackEventWithRetry(eventId);
-  const callback = getCeloxCallbackEvent(eventId);
+  const callback = await getCeloxCallbackEvent(eventId);
   if (!callback) {
     return Response.json({ error: "ไม่พบ Callback หลังประมวลผล" }, { status: 404 });
   }

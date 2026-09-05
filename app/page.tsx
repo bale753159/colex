@@ -156,7 +156,7 @@ export default function FinanceDashboard() {
 
         <div className="sidebar-status">
           <span className="status-dot" />
-          <span><strong>SQLite พร้อมใช้งาน</strong><small>บันทึกข้อมูลในเครื่อง</small></span>
+          <span><strong>Supabase พร้อมใช้งาน</strong><small>บันทึกข้อมูลบน Supabase</small></span>
         </div>
       </aside>
 

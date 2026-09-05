@@ -25,7 +25,7 @@ export function looksLikeCeloxC2CCallback(value: unknown) {
     && (Object.hasOwn(value, "event") || Object.hasOwn(value, "transferTo"));
 }
 
-export function acceptCeloxC2CCallbackPayload(
+export async function acceptCeloxC2CCallbackPayload(
   payload: unknown,
   signatureHeader: string | null,
 ) {
@@ -42,9 +42,9 @@ export function acceptCeloxC2CCallbackPayload(
     return errorResponse(401, "ตรวจลายเซ็น Callback C2C ไม่สำเร็จ", "unauthenticated");
   }
 
-  let queued: ReturnType<typeof enqueueCeloxC2CCallbackEvent>;
+  let queued: Awaited<ReturnType<typeof enqueueCeloxC2CCallbackEvent>>;
   try {
-    queued = enqueueCeloxC2CCallbackEvent(payload, hashCeloxC2CCallbackPayload(payload));
+    queued = await enqueueCeloxC2CCallbackEvent(payload, hashCeloxC2CCallbackPayload(payload));
   } catch {
     return errorResponse(503, "บันทึก Callback C2C ลงระบบไม่สำเร็จ", "persistence_error");
   }

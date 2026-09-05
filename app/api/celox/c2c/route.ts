@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   const limit = Number.isFinite(rawLimit) ? rawLimit : 100;
   try {
     const response: CeloxC2CListResponse = {
-      transactions: listCeloxC2CTransactions({ search, limit }),
+      transactions: await listCeloxC2CTransactions({ search, limit }),
     };
     return Response.json(response, {
       headers: { "Cache-Control": "no-store" },
