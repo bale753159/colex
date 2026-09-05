@@ -267,16 +267,31 @@ function mapTransaction(row: TransactionRow): Transaction {
   };
 }
 
+// รูปแบบวันที่ที่ Postgres ยอมรับก่อนแคสต์ `?::date` เท่านั้น — ตรวจแค่รูปร่างสตริง
+// ไม่ตรวจว่าเป็นวันที่จริงหรือไม่ (เช่น "2026-13-45" ผ่านรูปร่างนี้แต่แคสต์ไม่ผ่าน)
+const DATE_ONLY_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
+
 function dateClause(from?: string, to?: string, column = "t.created_at") {
   const clauses: string[] = [];
   const values: string[] = [];
   if (from) {
-    clauses.push(`(${column} AT TIME ZONE 'Asia/Bangkok')::date >= ?::date`);
-    values.push(from);
+    if (DATE_ONLY_SHAPE.test(from)) {
+      clauses.push(`(${column} AT TIME ZONE 'Asia/Bangkok')::date >= ?::date`);
+      values.push(from);
+    } else {
+      // ใต้ SQLite เดิม date('ค่าที่ผิดรูปแบบ') คืน NULL ทำให้เงื่อนไขเป็นเท็จและได้ผลลัพธ์
+      // ว่างเปล่า ใต้ Postgres '...'::date ที่ผิดรูปแบบจะ throw SQLSTATE 22007 แทน คงพฤติกรรม
+      // เดิมไว้ด้วยเงื่อนไขเท็จเสมอ แทนที่จะปล่อยให้ query พัง
+      clauses.push("false");
+    }
   }
   if (to) {
-    clauses.push(`(${column} AT TIME ZONE 'Asia/Bangkok')::date <= ?::date`);
-    values.push(to);
+    if (DATE_ONLY_SHAPE.test(to)) {
+      clauses.push(`(${column} AT TIME ZONE 'Asia/Bangkok')::date <= ?::date`);
+      values.push(to);
+    } else {
+      clauses.push("false");
+    }
   }
   return { sql: clauses.length ? ` AND ${clauses.join(" AND ")}` : "", values };
 }
@@ -2361,6 +2376,13 @@ export async function createTransaction(input: CreateTransactionInput) {
       return [id];
     }
 
+    // เดิม (ก่อนพอร์ตไป Postgres) เช็ค "ไม่พบข้อมูลลูกค้าที่เลือก" นอก transaction ทั้งหมด
+    // ก่อนเช็คคู่รายการ C2C ใดๆ คงลำดับข้อความนั้นไว้ด้วยการอ่านแบบไม่ล็อกก่อน — การล็อกจริง
+    // เพื่อกัน TOCTOU เกิดขึ้นทีหลังตอนอ่านแบบเรียง id ข้างล่าง
+    const customerFound = await t.first<{ id: string }>(
+      "SELECT id FROM customers WHERE id = ?", [input.customerId]);
+    if (!customerFound) throw new Error("ไม่พบข้อมูลลูกค้าที่เลือก");
+
     if (!input.counterpartyCustomerId) throw new Error("กรุณาเลือกลูกค้าคู่รายการ C2C");
     if (input.counterpartyCustomerId === input.customerId) {
       throw new Error("บัญชีต้นทางและปลายทางต้องไม่ใช่บัญชีเดียวกัน");
@@ -2394,11 +2416,17 @@ export async function createTransaction(input: CreateTransactionInput) {
     `, [amountSatang, amountSatang, source.id, amountSatang]);
     if (debited.rowCount !== 1) throw new Error(`ยอดเงินที่ถอนได้ของ ${source.name} ไม่เพียงพอ`);
 
-    await t.run(`
+    const credited = await t.run(`
       UPDATE customers
       SET balance_satang = balance_satang + ?, withdrawable_satang = withdrawable_satang + ?
       WHERE id = ?
     `, [amountSatang, amountSatang, target.id]);
+    // แถวนี้ถูกล็อกด้วย FOR UPDATE และพิสูจน์แล้วว่ามีอยู่จริงข้างบน จึงไม่ควรเกิดขึ้นวันนี้ แต่ทุก
+    // UPDATE เงินอื่นในไฟล์นี้มีการ์ด rowCount กำกับ — ถ้ามีคนย้ายหรือถอด FOR UPDATE ออกในอนาคต
+    // การ์ดนี้จะยังจับความล้มเหลวได้แทนที่จะปล่อยให้เงินหายเงียบๆ
+    if (credited.rowCount !== 1) {
+      throw new Error(target.id === selected.id ? "ไม่พบข้อมูลลูกค้าที่เลือก" : "ไม่พบลูกค้าคู่รายการ C2C");
+    }
 
     const groupId = createId("C2C");
     const sourceId = createId("TXN");

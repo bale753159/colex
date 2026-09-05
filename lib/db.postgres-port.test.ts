@@ -92,6 +92,29 @@ describe("lib/db.ts on Postgres", () => {
     expect(typeof both.summary.balanceTotal).toBe("number");
   });
 
+  // SQLite's date('malformed') returns NULL, so the comparison was false and the query
+  // returned zero matching rows. Postgres's '...'::date raises SQLSTATE 22007 instead, which
+  // without validation turns a malformed from/to into an unhandled rejection (a 500 at the
+  // route). dateClause must restore the old "no matching rows" behaviour instead of rejecting.
+  it("listCustomers resolves (not rejects) with a malformed from/to instead of raising", async () => {
+    await seedCustomer("C-1", "ก", 100_000, 100_000);
+    await db.run(`
+      INSERT INTO transactions (id, customer_id, direction, channel, amount_satang, note, status, created_at)
+      VALUES ('T-1', 'C-1', 'deposit', 'account', 1000, '', 'success', '2026-03-01T00:00:00Z')
+    `);
+
+    const badFrom = await mod.listCustomers({ from: "not-a-date", to: "2026-03-02" });
+    expect(badFrom.summary.transactionCount).toBe(0);
+    expect(badFrom.customers[0].depositTotal).toBe(0);
+
+    const badTo = await mod.listCustomers({ from: "2026-03-01", to: "abc" });
+    expect(badTo.summary.transactionCount).toBe(0);
+
+    // valid dates on both ends still match, proving the guard only rejects malformed input
+    const valid = await mod.listCustomers({ from: "2026-03-01", to: "2026-03-01" });
+    expect(valid.summary.transactionCount).toBe(1);
+  });
+
   it("listCustomers sorts customers with no activity last (SQLite DESC NULL order)", async () => {
     await seedCustomer("C-QUIET", "เงียบ", 0, 0);
     await seedCustomer("C-BUSY", "ยุ่ง", 0, 0);

@@ -105,7 +105,7 @@ describe("syncCeloxC2CTransaction settling a partially-filled withdrawal", () =>
       }],
     };
 
-    await expect(syncCeloxC2CTransaction(result)).resolves.not.toThrow();
+    await syncCeloxC2CTransaction(result);
 
     expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 16_000, withdrawable_satang: 16_000 });
     const row = await readC2CRow(seed.transactionId);
