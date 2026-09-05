@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/sql";
 import { setupTestDatabase, teardownTestDatabase, truncateAll } from "@/test/pg-harness";
+import type { CeloxC2CCallbackRequest, CeloxCallbackRequest } from "./celox/types";
 
 let mod: typeof import("./db");
 
@@ -150,6 +151,104 @@ describe("lib/db.ts on Postgres", () => {
     expect(await mod.listCustomerCeloxWithdrawalHolds("C-1")).toHaveLength(0);
     expect(await db.first("SELECT withdrawable_satang FROM customers WHERE id = ?", ["C-1"]))
       .toEqual({ withdrawable_satang: 100_000 });
+  });
+
+  // occurred_at เคยเป็น TEXT ใน SQLite (เก็บสตริงตามที่ Celox ส่งมา) ตอนนี้เป็น timestamptz
+  // ที่อ่านกลับมาเป็น UTC ISO เสมอ ถ้าเทียบสตริงตรงตัว payload เดิมที่เขียนเวลาต่างรูปแบบ
+  // จะกลายเป็น conflict (HTTP 409) แทน duplicate — ต้องเทียบที่ "ช่วงเวลา" เท่านั้น
+  it("treats a redelivered account callback as a duplicate across ISO spellings", async () => {
+    const base: Omit<CeloxCallbackRequest, "occurredAt"> = {
+      transactionId: "TX-ISO", orderId: "O-ISO", referenceId: null, status: "SUCCESS", amount: 10,
+    };
+    // ทั้งสามสตริงคือช่วงเวลาเดียวกัน: 2026-08-30T10:05:12Z
+    const first = await mod.enqueueCeloxCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:12.000Z" });
+    expect(first.duplicate).toBe(false);
+    expect(first.conflict).toBe(false);
+
+    const offsetSpelling = await mod.enqueueCeloxCallbackEvent({ ...base, occurredAt: "2026-08-30T17:05:12+07:00" });
+    expect(offsetSpelling.eventId).toBe(first.eventId);
+    expect(offsetSpelling.duplicate).toBe(true);
+    expect(offsetSpelling.conflict).toBe(false);
+
+    const noMillis = await mod.enqueueCeloxCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:12Z" });
+    expect(noMillis.duplicate).toBe(true);
+    expect(noMillis.conflict).toBe(false);
+
+    // เวลาต่างกันจริงยังต้องเป็น conflict เหมือนเดิม
+    const realConflict = await mod.enqueueCeloxCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:13.000Z" });
+    expect(realConflict.conflict).toBe(true);
+    expect(realConflict.shouldProcess).toBe(false);
+  });
+
+  it("treats a redelivered C2C callback as a duplicate across ISO spellings", async () => {
+    const hash = "b".repeat(64);
+    const base: Omit<CeloxC2CCallbackRequest, "occurredAt"> = {
+      transactionId: "TX-C2C-ISO", orderId: "O-C2C-ISO", referenceId: "REF-C2C-ISO",
+      status: "SUCCESS", amount: 25,
+      parts: [{ transactionId: "TX-C2C-ISO", orderId: "O-C2C-ISO", amount: 25, status: "SUCCESS" }],
+      unfilledAmount: 0,
+    };
+    const first = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:12.000Z" }, hash);
+    expect(first.duplicate).toBe(false);
+    expect(first.conflict).toBe(false);
+
+    const offsetSpelling = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T17:05:12+07:00" }, hash);
+    expect(offsetSpelling.eventId).toBe(first.eventId);
+    expect(offsetSpelling.duplicate).toBe(true);
+    expect(offsetSpelling.conflict).toBe(false);
+
+    const noMillis = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:12Z" }, hash);
+    expect(noMillis.duplicate).toBe(true);
+    expect(noMillis.conflict).toBe(false);
+
+    const realConflict = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:13.000Z" }, hash);
+    expect(realConflict.conflict).toBe(true);
+    expect(realConflict.shouldProcess).toBe(false);
+  });
+
+  it("still treats a null occurredAt as matching only another null", async () => {
+    const base: Omit<CeloxCallbackRequest, "occurredAt"> = {
+      transactionId: "TX-NULL", orderId: "O-NULL", referenceId: null, status: "PENDING", amount: 10,
+    };
+    const first = await mod.enqueueCeloxCallbackEvent({ ...base, occurredAt: null });
+    expect(first.conflict).toBe(false);
+    const sameNull = await mod.enqueueCeloxCallbackEvent({ ...base, occurredAt: null });
+    expect(sameNull.duplicate).toBe(true);
+    expect(sameNull.conflict).toBe(false);
+    const nowDated = await mod.enqueueCeloxCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:12.000Z" });
+    expect(nowDated.conflict).toBe(true);
+  });
+
+  it("search matches case-insensitively, as SQLite LIKE did", async () => {
+    await seedCustomer("C-1", "วรพงษ์", 0, 0);
+    await mod.createTransaction({ customerId: "C-1", kind: "deposit_account", amount: 5 });
+    // account เป็น `ACC-C-1` ตัวพิมพ์ใหญ่ — พิมพ์ตัวเล็กต้องยังเจอ
+    expect((await mod.listCustomers({ search: "acc-c-1" })).customers).toHaveLength(1);
+    expect((await mod.listCustomers({ search: "ACC-C-1" })).customers).toHaveLength(1);
+    expect((await mod.listCustomers({ search: "acc-nope" })).customers).toHaveLength(0);
+    expect((await mod.listTransactions({ search: "acc-c-1" })).transactions).toHaveLength(1);
+    expect((await mod.listTransactions({ search: "txn-" })).transactions).toHaveLength(1);
+  });
+
+  it("C2C listing search matches case-insensitively", async () => {
+    await seedCustomer("C-1", "ก", 100_000, 100_000);
+    await db.run(`
+      INSERT INTO transactions (id, customer_id, direction, channel, amount_satang, note, status, created_at)
+      VALUES ('TXN-C2C-1', 'C-1', 'withdraw', 'c2c', 1000, '', 'pending', '2026-03-01T00:00:00Z')
+    `);
+    await db.run(`
+      INSERT INTO celox_c2c_transactions (
+        transaction_id, order_id, reference_id, customer_id, direction,
+        transaction_status, amount_satang, fee_amount_satang, settled_amount_satang,
+        held_amount_satang, awaiting_manual_review, match_deadline, funds_reserved,
+        local_transaction_id, created_at, updated_at
+      ) VALUES ('TX-UP', 'ORD-UPPER', 'REF-UPPER', 'C-1', 'withdraw',
+        'PENDING_TRANSFER', 1000, 0, 0, 1000, false, NULL, true, 'TXN-C2C-1', ?, ?)
+    `, ["2026-03-01T00:00:00Z", "2026-03-01T00:00:00Z"]);
+    expect(await mod.listCeloxC2CTransactions({ search: "ord-upper" })).toHaveLength(1);
+    expect(await mod.listCeloxC2CTransactions({ search: "ref-upper" })).toHaveLength(1);
+    expect(await mod.listCeloxC2CTransactions({ search: "tx-up" })).toHaveLength(1);
+    expect(await mod.listCeloxC2CTransactions({ search: "ord-nope" })).toHaveLength(0);
   });
 
   it("customerExists and callback listing", async () => {

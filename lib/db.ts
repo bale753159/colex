@@ -307,6 +307,18 @@ async function getSummary(t: Queryable, from?: string, to?: string): Promise<Fin
   };
 }
 
+/**
+ * ช่องค้นหาทุกช่องในไฟล์นี้ใช้ `ILIKE` ไม่ใช่ `LIKE`
+ *
+ * `LIKE` ของ SQLite ไม่สนตัวพิมพ์เล็กใหญ่สำหรับ ASCII อยู่แล้วโดยค่าเริ่มต้น เจ้าหน้าที่จึงพิมพ์
+ * `acc-90241` แล้วเจอ `ACC-90241` ได้ ส่วน `LIKE` ของ Postgres สนตัวพิมพ์ ถ้าแปลงตรงตัว
+ * การค้นหาเลขบัญชี เบอร์โทร อีเมล และรหัสรายการ (ASCII ทั้งหมด) จะพังทันที `ILIKE` จึงตรงกับ
+ * พฤติกรรมเดิมมากกว่า
+ *
+ * ข้อต่างที่ยังเหลือ (พิจารณาแล้วและยอมรับ): SQLite พับตัวพิมพ์เฉพาะ ASCII แต่ `ILIKE` พับตาม
+ * locale ของฐานข้อมูลซึ่งครอบ Unicode ทั้งหมด ข้อมูลที่ค้นในโปรเจกต์นี้เป็น ASCII หรือภาษาไทย
+ * (ไทยไม่มีตัวพิมพ์เล็กใหญ่) ช่องว่างนี้จึงไม่ส่งผลกับข้อมูลชุดนี้
+ */
 export async function listCustomers(options: { search?: string; from?: string; to?: string } = {}) {
   const period = dateClause(options.from, options.to);
   const search = `%${options.search?.trim() ?? ""}%`;
@@ -319,7 +331,7 @@ export async function listCustomers(options: { search?: string; from?: string; t
       (SELECT MAX(all_t.created_at) FROM transactions all_t WHERE all_t.customer_id = c.id) AS last_activity
     FROM customers c
     LEFT JOIN transactions t ON t.customer_id = c.id AND t.status = 'success'${period.sql}
-    WHERE c.name LIKE ? OR c.account LIKE ? OR c.phone LIKE ?
+    WHERE c.name ILIKE ? OR c.account ILIKE ? OR c.phone ILIKE ?
     GROUP BY c.id
     ORDER BY last_activity DESC NULLS LAST, c.created_at DESC
   `, [...period.values, search, search, search]) as Array<CustomerRow & {
@@ -358,7 +370,8 @@ export async function listTransactions(options: { search?: string; direction?: T
   const conditions: string[] = [];
   const values: Array<string | number> = [];
   if (options.search?.trim()) {
-    conditions.push("(c.name LIKE ? OR c.account LIKE ? OR t.id LIKE ?)");
+    // ILIKE ไม่ใช่ LIKE — เหตุผลอยู่ที่คอมเมนต์เหนือ listCustomers
+    conditions.push("(c.name ILIKE ? OR c.account ILIKE ? OR t.id ILIKE ?)");
     const search = `%${options.search.trim()}%`;
     values.push(search, search, search);
   }
@@ -1511,9 +1524,10 @@ export async function listCeloxC2CTransactions(options: { search?: string; limit
   const conditions: string[] = [];
   if (options.search?.trim()) {
     const search = `%${options.search.trim()}%`;
+    // ILIKE ไม่ใช่ LIKE — เหตุผลอยู่ที่คอมเมนต์เหนือ listCustomers
     conditions.push(`(
-      c.name LIKE ? OR c.account LIKE ? OR x.order_id LIKE ?
-      OR x.reference_id LIKE ? OR x.transaction_id LIKE ?
+      c.name ILIKE ? OR c.account ILIKE ? OR x.order_id ILIKE ?
+      OR x.reference_id ILIKE ? OR x.transaction_id ILIKE ?
     )`);
     values.push(search, search, search, search, search);
   }
@@ -1547,6 +1561,26 @@ export async function listCeloxC2CTransactions(options: { search?: string; limit
   }));
 }
 
+/**
+ * เทียบเวลาที่เก็บไว้กับเวลาที่มาใน payload โดยดูที่ "ช่วงเวลาเดียวกันหรือไม่" ไม่ใช่สตริงตรงกันหรือไม่
+ *
+ * สมัยที่ยังเป็น SQLite คอลัมน์ `occurred_at` เป็น TEXT จึงเก็บสตริงตามที่ Celox ส่งมาแบบตรงตัว
+ * การเทียบสตริงจึงตรงกันเสมอเมื่อ Celox ส่ง payload เดิมซ้ำ ตอนนี้คอลัมน์เป็น `timestamptz`
+ * และ `lib/sql.ts` แปลงค่าที่อ่านกลับมาเป็น ISO 8601 แบบ UTC เสมอ ถ้ายังเทียบสตริงอยู่
+ * payload เดิมที่เขียนเวลาในรูปแบบ ISO อื่น (เช่น offset `+07:00` หรือไม่มีมิลลิวินาที)
+ * จะถูกตัดสินว่าเป็น conflict แล้วตอบ HTTP 409 แทนที่จะเป็น duplicate ที่ไม่มีปัญหา
+ *
+ * ทั้งสองฝั่งจึงถูก parse ด้วยวิธีเดียวกันก่อนเทียบ ถ้าฝั่งใดฝั่งหนึ่ง parse ไม่ได้
+ * ให้ถอยไปเทียบสตริงตรงตัวแบบเดิม เพื่อไม่ให้ค่าที่อ่านไม่ออกกลายเป็น "ตรงกัน" โดยไม่ตั้งใจ
+ */
+function sameInstant(stored: string | null, incoming: string | null) {
+  if (stored === null || incoming === null) return stored === incoming;
+  const storedTime = Date.parse(stored);
+  const incomingTime = Date.parse(incoming);
+  if (Number.isNaN(storedTime) || Number.isNaN(incomingTime)) return stored === incoming;
+  return storedTime === incomingTime;
+}
+
 function c2cCallbackPayloadMatches(
   row: CeloxC2CCallbackRow,
   input: CeloxC2CCallbackRequest,
@@ -1556,7 +1590,7 @@ function c2cCallbackPayloadMatches(
   return row.order_id === input.orderId
     && row.reference_id === input.referenceId
     && row.amount_satang === amountSatang
-    && row.occurred_at === input.occurredAt
+    && sameInstant(row.occurred_at, input.occurredAt)
     && row.signed_payload_hash === signedPayloadHash;
 }
 
@@ -1848,7 +1882,7 @@ function callbackPayloadMatches(row: CeloxCallbackRow, input: CeloxCallbackReque
   return row.order_id === input.orderId
     && row.reference_id === input.referenceId
     && row.amount_satang === amountSatang
-    && row.occurred_at === input.occurredAt;
+    && sameInstant(row.occurred_at, input.occurredAt);
 }
 
 export async function enqueueCeloxCallbackEvent(input: CeloxCallbackRequest) {
