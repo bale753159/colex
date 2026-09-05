@@ -67,6 +67,9 @@ function depositPayload(overrides: Record<string, unknown> = {}) {
 }
 
 describe("matchTtlSeconds", () => {
+  // 60 และ 120 เปิดไว้ตามที่ทีมสั่ง แต่ Celox staging ยังตอบ 422
+  // {"field":"matchTtlSeconds","code":"out_of_range"} สำหรับ 60, 120, 180 และ 240
+  // (ค่าต่ำสุดที่ผ่านจริงคือ 300) ถ้ายังตกอยู่ ให้ไล่จาก 422 ของ Celox ไม่ใช่ validator ตัวนี้
   it("รับ 60 และ 120 วินาทีทั้งฝั่งถอนและฝั่งฝาก", () => {
     for (const matchTtlSeconds of [60, 120]) {
       const withdrawal = validateCreateC2CWithdrawal(withdrawalPayload({ matchTtlSeconds }));
@@ -81,14 +84,18 @@ describe("matchTtlSeconds", () => {
 
   it("ยังรับชุดเดิม 300–1200 วินาที", () => {
     for (const matchTtlSeconds of [300, 600, 900, 1200]) {
-      const result = validateCreateC2CWithdrawal(withdrawalPayload({ matchTtlSeconds }));
-      expect(result.fieldErrors).toEqual([]);
-      expect(result.input?.matchTtlSeconds).toBe(matchTtlSeconds);
+      const withdrawal = validateCreateC2CWithdrawal(withdrawalPayload({ matchTtlSeconds }));
+      expect(withdrawal.fieldErrors).toEqual([]);
+      expect(withdrawal.input?.matchTtlSeconds).toBe(matchTtlSeconds);
+
+      const deposit = validateCreateC2CDeposit(depositPayload({ matchTtlSeconds }));
+      expect(deposit.fieldErrors).toEqual([]);
+      expect(deposit.input?.matchTtlSeconds).toBe(matchTtlSeconds);
     }
   });
 
-  it("ยังปฏิเสธค่านอกชุดที่อนุญาต", () => {
-    for (const matchTtlSeconds of [30, 90, 150, 1800, "60"]) {
+  it("ยังปฏิเสธค่านอกชุดที่อนุญาตและค่าที่ไม่ใช่ตัวเลข", () => {
+    for (const matchTtlSeconds of [30, 90, 180, 240, 450, 1800, "60"]) {
       const withdrawal = validateCreateC2CWithdrawal(withdrawalPayload({ matchTtlSeconds }));
       expect(withdrawal.fieldErrors).toContainEqual({ field: "matchTtlSeconds", code: "invalid" });
       expect(withdrawal.input).toBeUndefined();

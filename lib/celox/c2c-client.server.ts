@@ -436,8 +436,10 @@ function isCreateC2CWithdrawalResponse(
     && ["PENDING", "PENDING_TRANSFER", "PENDING_MANUAL_C2C"].includes(String(value.transactionStatus))
     && value.amount === input.amount
     && isMoney(value.feeAmount)
+    // Celox กันเฉพาะค่าธรรมเนียม เงินต้นไหลออกทางคู่ขา C2C จึงไม่ถูก hold
+    // reservedAmount ที่ได้จริงคือ feeAmount ตรงกับ heldAmount ที่ GET รายการเดียวกันรายงาน
+    // ห้ามบังคับว่าต้องเท่ากับ amount + feeAmount เพราะจะทำให้ 201 กลายเป็น invalid_response
     && isMoney(value.reservedAmount)
-    && Math.round(value.reservedAmount * 100) === Math.round((value.amount + value.feeAmount) * 100)
     && typeof value.awaitingManualReview === "boolean"
     && isNullableIsoDate(value.matchDeadline);
 }

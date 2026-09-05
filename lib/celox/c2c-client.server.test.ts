@@ -95,4 +95,42 @@ describe("createC2CWithdrawal", () => {
       fieldErrors: [{ field: "amount", code: "out_of_range" }],
     });
   });
+
+  // body จริงจาก staging เมื่อส่ง amount 100: Celox กันเฉพาะค่าธรรมเนียม ไม่ได้กันเงินต้น
+  // ยืนยันซ้ำจาก GET รายการเดียวกันที่รายงาน heldAmount: 2 เท่ากับ reservedAmount ตรงนี้
+  function createdFixture(overrides: Record<string, unknown> = {}) {
+    return {
+      transactionId: "01a07093-e092-7dd8-9d5c-0493347cafa7",
+      orderId: "WTH-C2C-1788595134605-bo4t9",
+      referenceId: "KLANG-C2C-WD-TEST",
+      transactionStatus: "PENDING",
+      amount: 100,
+      feeAmount: 2,
+      reservedAmount: 2,
+      awaitingManualReview: false,
+      matchDeadline: "2026-09-05T08:03:54.593Z",
+      ...overrides,
+    };
+  }
+
+  it("accepts a response whose reservedAmount covers the fee only", async () => {
+    stubFetchJson(createdFixture());
+    const result = await createC2CWithdrawal({ ...withdrawalInput(), amount: 100 });
+    expect(result.reservedAmount).toBe(2);
+    expect(result.amount).toBe(100);
+  });
+
+  it("accepts a response whose reservedAmount covers principal plus fee", async () => {
+    stubFetchJson(createdFixture({ reservedAmount: 102 }));
+    const result = await createC2CWithdrawal({ ...withdrawalInput(), amount: 100 });
+    expect(result.reservedAmount).toBe(102);
+  });
+
+  it("still rejects a response with no usable reservedAmount", async () => {
+    for (const reservedAmount of [undefined, null, -1, "2"]) {
+      stubFetchJson(createdFixture({ reservedAmount }));
+      await expect(createC2CWithdrawal({ ...withdrawalInput(), amount: 100 }))
+        .rejects.toMatchObject({ code: "invalid_response" });
+    }
+  });
 });
