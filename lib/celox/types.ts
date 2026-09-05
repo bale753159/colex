@@ -70,7 +70,7 @@ export type ConfirmWithdrawalResponse = {
   };
 };
 
-export type C2CMatchTtlSeconds = 300 | 600 | 900 | 1200;
+export type C2CMatchTtlSeconds = 60 | 120 | 300 | 600 | 900 | 1200;
 
 export type C2CTransactionStatus =
   | "PENDING"
@@ -171,6 +171,8 @@ export type C2CTransactionResponse = {
   feeAmount: number;
   settledAmount: number;
   heldAmount: number;
+  // ฝั่งถอน: ยอดที่ยังขาดอยู่ (0 เมื่อไม่มีส่วนไหนขาด) · ฝั่งฝากเป็น null เสมอ
+  unfilledAmount: number | null;
   awaitingManualReview: boolean;
   matchDeadline: string | null;
   transferTo: C2CTransferTo | null;
@@ -369,7 +371,7 @@ export type CeloxValidationField =
 
 export type CeloxFieldError = {
   field: CeloxValidationField;
-  code: "required" | "invalid" | "invalid_bank_code" | "mismatch" | "not_supported";
+  code: "required" | "invalid" | "invalid_bank_code" | "mismatch" | "not_supported" | "out_of_range";
 };
 
 export type CeloxErrorCode =

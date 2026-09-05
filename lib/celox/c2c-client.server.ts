@@ -151,6 +151,9 @@ function readFieldErrors(body: unknown): CeloxFieldError[] {
     "invalid_bank_code",
     "mismatch",
     "not_supported",
+    // Celox ส่ง out_of_range เมื่อ amount อยู่นอกช่วงที่อนุญาต ถ้าไม่รับไว้
+    // 422 ที่ระบุ field ชัดเจนจะกลายเป็น upstream_error 502 ที่ debug ไม่ได้
+    "out_of_range",
   ]);
 
   return body.errors.flatMap((item) => {
@@ -470,6 +473,7 @@ function isC2CTransactionResponse(value: unknown): value is C2CTransactionRespon
     && isMoney(value.feeAmount)
     && isMoney(value.settledAmount)
     && isMoney(value.heldAmount)
+    && (value.direction === "withdraw" ? isMoney(value.unfilledAmount) : value.unfilledAmount === null)
     && typeof value.awaitingManualReview === "boolean"
     && isNullableIsoDate(value.matchDeadline)
     && (value.transferTo === null || isTransferTo(value.transferTo))

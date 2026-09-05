@@ -46,7 +46,7 @@ function readBase(value: unknown) {
   if ("matchTtlSeconds" in value && value.matchTtlSeconds !== undefined) {
     if (
       typeof value.matchTtlSeconds !== "number"
-      || ![300, 600, 900, 1200].includes(value.matchTtlSeconds)
+      || ![60, 120, 300, 600, 900, 1200].includes(value.matchTtlSeconds)
     ) {
       fieldErrors.push({ field: "matchTtlSeconds", code: "invalid" });
     } else {
@@ -103,6 +103,13 @@ function requiredString(
   return value.trim();
 }
 
+// ฝั่งถอนไม่คุมความยาวเลขบัญชี บางธนาคาร/พร้อมเพย์สั้นกว่า 10 หลัก (เช่น 9 หลัก)
+// ปล่อยให้ Celox เป็นคนตัดสินว่าเลขบัญชีปลายทางใช้ได้จริงหรือไม่
+const ACCOUNT_NO_PATTERN = {
+  sourceAccountNo: /^\d{10,15}$/,
+  destinationAccountNo: /^\d+$/,
+} as const;
+
 function accountNumber(
   value: string | undefined,
   field: "sourceAccountNo" | "destinationAccountNo",
@@ -110,7 +117,7 @@ function accountNumber(
 ) {
   if (!value) return undefined;
   const normalized = value.replace(/[\s-]/g, "");
-  if (!/^\d{10,15}$/.test(normalized)) {
+  if (!ACCOUNT_NO_PATTERN[field].test(normalized)) {
     fieldErrors.push({ field, code: "invalid" });
     return undefined;
   }
