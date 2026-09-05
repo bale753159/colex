@@ -79,3 +79,146 @@ export function toPositional(sql: string): string {
 
   return out;
 }
+
+const OID_INT8 = 20;
+const OID_TIMESTAMP = 1114;
+const OID_TIMESTAMPTZ = 1184;
+
+function toSafeInt(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`ค่าจำนวนเต็มจากฐานข้อมูลเกินช่วงที่ปลอดภัย: ${value}`);
+  }
+  return parsed;
+}
+
+function toIsoString(value: string | null): string | null {
+  if (value === null) return null;
+  return new Date(value).toISOString();
+}
+
+type Exec = (sql: string, params: unknown[]) => Promise<{ rows: Row[]; rowCount: number }>;
+
+interface Driver {
+  exec: Exec;
+  transaction<T>(fn: (exec: Exec) => Promise<T>): Promise<T>;
+  close(): Promise<void>;
+}
+
+let driverPromise: Promise<Driver> | undefined;
+
+async function createPgDriver(): Promise<Driver> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("ไม่พบ DATABASE_URL กรุณาตั้งค่าการเชื่อมต่อ Supabase ใน .env.local");
+  }
+  pgTypes.setTypeParser(OID_INT8, toSafeInt as (value: string) => number);
+  pgTypes.setTypeParser(OID_TIMESTAMPTZ, toIsoString as (value: string) => string);
+  pgTypes.setTypeParser(OID_TIMESTAMP, toIsoString as (value: string) => string);
+  const pool = new Pool({ connectionString, max: 10 });
+
+  const exec: Exec = async (sql, params) => {
+    const result = await pool.query(toPositional(sql), params);
+    return { rows: result.rows as Row[], rowCount: result.rowCount ?? 0 };
+  };
+
+  return {
+    exec,
+    async transaction(fn) {
+      const client = await pool.connect();
+      try {
+        // BEGIN เปล่าคือ READ COMMITTED ซึ่งเป็นค่าปกติของ Postgres และเป็นสิ่งที่ spec เลือกไว้
+        // guard predicate บวก row lock เพียงพอแล้ว ไม่ต้องใช้ SERIALIZABLE ซึ่งจะบังคับให้เขียน retry loop ทุกจุด
+        await client.query("BEGIN");
+        const scoped: Exec = async (sql, params) => {
+          const result = await client.query(toPositional(sql), params);
+          return { rows: result.rows as Row[], rowCount: result.rowCount ?? 0 };
+        };
+        const value = await fn(scoped);
+        await client.query("COMMIT");
+        return value;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    close: () => pool.end(),
+  };
+}
+
+async function createPgliteDriver(): Promise<Driver> {
+  const { PGlite } = await import("@electric-sql/pglite");
+  const client = new PGlite({
+    parsers: {
+      [OID_INT8]: toSafeInt,
+      [OID_TIMESTAMPTZ]: toIsoString,
+      [OID_TIMESTAMP]: toIsoString,
+    },
+    serializers: {
+      [OID_TIMESTAMPTZ]: (value: unknown) => String(value),
+      [OID_TIMESTAMP]: (value: unknown) => String(value),
+    },
+  });
+
+  const execWith = (target: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[]; affectedRows?: number }> }): Exec =>
+    async (sql, params) => {
+      const result = await target.query(toPositional(sql), params);
+      return { rows: result.rows as Row[], rowCount: result.affectedRows ?? result.rows.length };
+    };
+
+  return {
+    exec: execWith(client),
+    async transaction(fn) {
+      return client.transaction(async (t) => fn(execWith(t))) as Promise<never>;
+    },
+    close: () => client.close(),
+  };
+}
+
+function getDriver(): Promise<Driver> {
+  if (!driverPromise) {
+    driverPromise = process.env.KLANG_TEST_PG === "pglite"
+      ? createPgliteDriver()
+      : createPgDriver();
+  }
+  return driverPromise;
+}
+
+function wrap(exec: Exec): Queryable {
+  return {
+    async query<T>(sql: string, params: unknown[] = []) {
+      const result = await exec(sql, params);
+      return result.rows as T[];
+    },
+    async first<T>(sql: string, params: unknown[] = []) {
+      const result = await exec(sql, params);
+      return result.rows[0] as T | undefined;
+    },
+    async run(sql: string, params: unknown[] = []) {
+      const result = await exec(sql, params);
+      return { rowCount: result.rowCount };
+    },
+  };
+}
+
+export const db: Queryable = {
+  query: async (sql, params) => wrap((await getDriver()).exec).query(sql, params),
+  first: async (sql, params) => wrap((await getDriver()).exec).first(sql, params),
+  run: async (sql, params) => wrap((await getDriver()).exec).run(sql, params),
+};
+
+export async function tx<T>(fn: (t: Tx) => Promise<T>): Promise<T> {
+  const driver = await getDriver();
+  return driver.transaction((exec) => fn(wrap(exec)));
+}
+
+/** ใช้ในเทสต์เท่านั้น: ปิด connection แล้วบังคับให้สร้าง driver ใหม่ครั้งถัดไป */
+export async function resetPoolForTests(): Promise<void> {
+  if (!driverPromise) return;
+  const driver = await driverPromise;
+  driverPromise = undefined;
+  await driver.close();
+}
