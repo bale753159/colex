@@ -268,14 +268,25 @@ function mapTransaction(row: TransactionRow): Transaction {
 }
 
 // รูปแบบวันที่ที่ Postgres ยอมรับก่อนแคสต์ `?::date` เท่านั้น — ตรวจแค่รูปร่างสตริง
-// ไม่ตรวจว่าเป็นวันที่จริงหรือไม่ (เช่น "2026-13-45" ผ่านรูปร่างนี้แต่แคสต์ไม่ผ่าน)
+// ไม่ตรวจว่าเป็นวันที่จริงหรือไม่ (เช่น "2026-13-45" ผ่านรูปร่างนี้แต่แคสต์ไม่ผ่าน จึงต้อง
+// ตรวจซ้ำด้วย isValidCalendarDate ด้านล่าง)
 const DATE_ONLY_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
+
+// ตรวจว่าสตริงรูปร่าง YYYY-MM-DD เป็นวันที่ปฏิทินจริง (เดือน 1-12 วันที่มีอยู่จริงในเดือนนั้น
+// รวมปีอธิกสุรทิน) ไม่ใช่แค่ตรงรูปร่าง — ค่าเช่น "2026-13-45" ตรงรูปร่างแต่ไม่ใช่วันที่จริง
+// และถ้าปล่อยผ่านจะทำให้ `?::date` ของ Postgres throw SQLSTATE 22007
+function isValidCalendarDate(value: string): boolean {
+  if (!DATE_ONLY_SHAPE.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
 
 function dateClause(from?: string, to?: string, column = "t.created_at") {
   const clauses: string[] = [];
   const values: string[] = [];
   if (from) {
-    if (DATE_ONLY_SHAPE.test(from)) {
+    if (isValidCalendarDate(from)) {
       clauses.push(`(${column} AT TIME ZONE 'Asia/Bangkok')::date >= ?::date`);
       values.push(from);
     } else {
@@ -286,7 +297,7 @@ function dateClause(from?: string, to?: string, column = "t.created_at") {
     }
   }
   if (to) {
-    if (DATE_ONLY_SHAPE.test(to)) {
+    if (isValidCalendarDate(to)) {
       clauses.push(`(${column} AT TIME ZONE 'Asia/Bangkok')::date <= ?::date`);
       values.push(to);
     } else {

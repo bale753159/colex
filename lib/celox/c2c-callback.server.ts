@@ -93,9 +93,13 @@ export function verifyCeloxC2CCallbackSignature(
   }
 }
 
-function isRetryableSqliteError(error: unknown) {
+// Postgres ใส่ SQLSTATE ไว้ที่ property `code` ของ error (ยืนยันแล้วทั้งจาก `pg` และ PGlite)
+// 40001 = serialization_failure, 40P01 = deadlock_detected — สองรหัสนี้เท่านั้นที่ควรลองใหม่
+// เพราะเป็นความขัดแย้งชั่วคราวจาก concurrency ไม่ใช่ error ถาวร ถ้า error ไม่มีรูปร่างที่รู้จัก
+// ให้ถือว่าลองใหม่ไม่ได้ ไม่ throw ซ้ำ
+export function isRetryablePostgresError(error: unknown) {
   if (typeof error !== "object" || error === null || !("code" in error)) return false;
-  return error.code === "SQLITE_BUSY" || error.code === "SQLITE_LOCKED";
+  return error.code === "40001" || error.code === "40P01";
 }
 
 function errorMessage(error: unknown) {
@@ -111,7 +115,7 @@ export async function processCeloxC2CCallbackEventWithRetry(eventId: number) {
     try {
       return await processCeloxC2CCallbackEvent(eventId);
     } catch (error) {
-      const canRetry = isRetryableSqliteError(error) && attempt < MAX_PROCESSING_ATTEMPTS - 1;
+      const canRetry = isRetryablePostgresError(error) && attempt < MAX_PROCESSING_ATTEMPTS - 1;
       if (canRetry) {
         const cap = RETRY_JITTER_CAPS_MS[attempt] ?? RETRY_JITTER_CAPS_MS.at(-1) ?? 1_000;
         await sleep(Math.floor(Math.random() * (cap + 1)));

@@ -1,6 +1,6 @@
 # KLANG Finance Dashboard
 
-ระบบจำลองงานการเงินสำหรับแอดมิน สร้างด้วย Next.js และ SQLite
+ระบบจำลองงานการเงินสำหรับแอดมิน สร้างด้วย Next.js และ Postgres (Supabase)
 
 ## เริ่มใช้งาน
 
@@ -26,11 +26,15 @@ npm run dev
 
 C2C ของ Celox บันทึก local ledger เป็น `pending` ก่อน และอัปเดตยอดแบบ exact-once เมื่อ GET สถานะจริงหรือผลแนบสลิปยืนยัน `SUCCESS`
 
-## SQLite
+## การตั้งค่าฐานข้อมูล
 
-ฐานข้อมูลสร้างอัตโนมัติครั้งแรกที่ `data/finance.sqlite` พร้อมข้อมูลตัวอย่าง ไฟล์ฐานข้อมูลและ WAL ถูกเพิ่มใน `.gitignore` แล้ว
+แอปนี้เก็บข้อมูลบน Postgres ผ่าน [Supabase](https://supabase.com) ไม่ใช้ `supabase-js`, PostgREST, Realtime, Auth หรือ Storage — เชื่อมต่อด้วย connection string ตรงผ่าน `pg` เท่านั้น
 
-กำหนดตำแหน่งฐานข้อมูลอื่นได้ด้วย environment variable `KLANG_DB_PATH` ซึ่งเหมาะสำหรับ test หรือ deployment ที่มี persistent volume
+1. สร้างโปรเจกต์ใหม่ใน Supabase
+2. ไปที่ Project Settings → Database → Connect แล้วคัดลอก connection string ของ **Session pooler** (พอร์ต 5432) — **ห้ามใช้ Transaction pooler** เพราะแอปพึ่ง multi-statement transaction บน connection เดียว (ดู `lib/sql.ts`) ซึ่ง Transaction pooler ไม่รองรับ นำ connection string ไปใส่เป็น `DATABASE_URL` ใน `.env.local`
+3. เปิด SQL Editor ของโปรเจกต์ แล้วรัน `supabase/migrations/0001_init.sql` ตามด้วย `supabase/seed.sql` ตามลำดับ เพื่อสร้างตารางและข้อมูลตัวอย่าง
+
+ระหว่างพัฒนา ทดสอบ (`npm test`) รันบน [PGlite](https://pglite.dev) ในหน่วยความจำโดยไม่ต้องมี `DATABASE_URL` จริง
 
 ## API ที่เตรียมไว้
 
@@ -168,7 +172,7 @@ Response ที่ระบบตอบมี type `{ received: true; duplicate:
 ### Callback retry/backoff policy
 
 - Celox ระบุว่าไม่มีการยิง webhook ซ้ำอัตโนมัติ ไม่ว่าจะตอบ 2xx หรือ non-2xx ดังนั้นระบบจะ commit durable inbox ก่อนตอบรับเสมอ
-- งานหลัง response retry เฉพาะ SQLite `BUSY`/`LOCKED` สูงสุด 3 attempts: ครั้งแรกทันที แล้ว full-jitter 0–500 ms และ 0–1,000 ms
+- งานหลัง response retry เฉพาะ Postgres SQLSTATE `40001` (serialization_failure)/`40P01` (deadlock_detected) สูงสุด 3 attempts: ครั้งแรกทันที แล้ว full-jitter 0–500 ms และ 0–1,000 ms
 - signature/validation/mapping mismatch เป็น permanent error และไม่ retry อัตโนมัติ
 - งานที่ยัง `pending`, `failed` หรือ `unmatched` สามารถกด “ประมวลผลอีกครั้ง” ในหน้า Customers ได้ ปุ่มนี้ทำงานกับ inbox ภายในเท่านั้น ไม่ได้ยิงหา Celox
 - ถ้า Celox Console แสดงว่ารายการมีอยู่หรือ `SUCCESS` แต่ระบบไม่เคยได้รับ event ห้ามเดาสถานะหรือปรับ ledger จากหน้าเว็บ ให้สั่ง Celox ส่ง signed Callback ซ้ำ หรือเชื่อม status/replay API ที่ Celox ระบุเพิ่มเติม เพราะ contract webhook นี้ไม่มี API สำหรับให้ระบบถามสถานะกลับ
@@ -343,7 +347,7 @@ curl --fail-with-body \
 
 Response คือ `{ "received": true, "duplicate": false }`; เมื่อส่ง signed payload เดิมซ้ำจะได้ `duplicate: true` และไม่มีการปรับยอดซ้ำ
 
-Callback C2C ไม่มี retry จาก Celox ระบบจึงตอบ 200 หลัง commit inbox เท่านั้น งานหลัง response retry เฉพาะ SQLite `BUSY`/`LOCKED` สูงสุด 3 attempts: ครั้งแรกทันที แล้ว full-jitter 0–500 ms และ 0–1,000 ms ส่วน signature, validation, payload mismatch และสถานะที่ไม่รองรับเป็น permanent error ไม่ retry อัตโนมัติ สถานะจริงยังตรวจซ้ำได้จาก `GET /api/celox/c2c/{reference}` ซึ่งเป็นแหล่งข้อมูลหลักของ C2C
+Callback C2C ไม่มี retry จาก Celox ระบบจึงตอบ 200 หลัง commit inbox เท่านั้น งานหลัง response retry เฉพาะ Postgres SQLSTATE `40001` (serialization_failure)/`40P01` (deadlock_detected) สูงสุด 3 attempts: ครั้งแรกทันที แล้ว full-jitter 0–500 ms และ 0–1,000 ms ส่วน signature, validation, payload mismatch และสถานะที่ไม่รองรับเป็น permanent error ไม่ retry อัตโนมัติ สถานะจริงยังตรวจซ้ำได้จาก `GET /api/celox/c2c/{reference}` ซึ่งเป็นแหล่งข้อมูลหลักของ C2C
 
 ### Retry และ backoff policy สำหรับ C2C
 

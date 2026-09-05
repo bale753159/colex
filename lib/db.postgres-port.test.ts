@@ -115,6 +115,28 @@ describe("lib/db.ts on Postgres", () => {
     expect(valid.summary.transactionCount).toBe(1);
   });
 
+  // A shape-valid but calendar-impossible date (e.g. month 13, day 45) still matches
+  // DATE_ONLY_SHAPE and would still reach `?::date`, raising SQLSTATE 22007 the same way a
+  // malformed string does. dateClause must treat it the same as a malformed date.
+  it("listCustomers resolves (not rejects) with a shape-valid but impossible calendar date", async () => {
+    await seedCustomer("C-1", "ก", 100_000, 100_000);
+    await db.run(`
+      INSERT INTO transactions (id, customer_id, direction, channel, amount_satang, note, status, created_at)
+      VALUES ('T-1', 'C-1', 'deposit', 'account', 1000, '', 'success', '2026-03-01T00:00:00Z')
+    `);
+
+    const badMonth = await mod.listCustomers({ from: "2026-13-01", to: "2026-03-02" });
+    expect(badMonth.summary.transactionCount).toBe(0);
+    expect(badMonth.customers[0].depositTotal).toBe(0);
+
+    const badDay = await mod.listCustomers({ from: "2026-03-01", to: "2026-02-45" });
+    expect(badDay.summary.transactionCount).toBe(0);
+
+    // valid dates on both ends still match, proving the guard only rejects impossible calendar dates
+    const valid = await mod.listCustomers({ from: "2026-03-01", to: "2026-03-01" });
+    expect(valid.summary.transactionCount).toBe(1);
+  });
+
   it("listCustomers sorts customers with no activity last (SQLite DESC NULL order)", async () => {
     await seedCustomer("C-QUIET", "เงียบ", 0, 0);
     await seedCustomer("C-BUSY", "ยุ่ง", 0, 0);
