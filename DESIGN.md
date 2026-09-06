@@ -2,19 +2,24 @@
 
 ## Direction
 
-ภาพของโต๊ะปฏิบัติการการเงินไทยช่วงสายภายใต้แสงสำนักงานที่สว่าง: ข้อมูลนิ่ง ชัด แม่นยำ และสงบ มีสีส้มเทอร์ราคอตตาแบบ Claude เป็นลายเซ็นที่ให้ความอบอุ่นและความมั่นใจ
+ภาพของโต๊ะปฏิบัติการการเงินไทยช่วงสายภายใต้แสงสำนักงานที่สว่าง: ข้อมูลนิ่ง ชัด แม่นยำ และสงบ มีสีทองอ่อนเป็นลายเซ็นที่ให้ความอบอุ่น น่าเชื่อถือ และไม่ล้าตาเมื่อมองนาน
 
 ## Color Strategy
 
-Minimal restrained product palette. ขาว เทาที่เจือ hue ของแบรนด์เล็กน้อย และดำเป็นสัดส่วนหลัก สีส้มเทอร์ราคอตตาใช้กับ brand mark, primary action, current selection และ data highlight เท่านั้น สีเขียวและแดงยังสงวนให้ความหมายฝาก–ถอน
+Minimal restrained product palette. ขาว เทาที่เจือ hue ของแบรนด์เล็กน้อย และดำเป็นสัดส่วนหลัก สีทองใช้กับ brand mark, primary action, current selection และ data highlight เท่านั้น
+
+สีทองคุม chroma ไว้ต่ำ (~0.115) เพื่อไม่ให้แสบตา และแยกเป็นสองระดับ: `--primary` ทองสว่างสำหรับ accent และพื้นผิว (ใช้คู่กับ `--on-primary` เพราะตัวอักษรขาวบนทองสว่าง contrast ไม่ผ่าน) ส่วน `--primary-strong` ทองบรอนซ์เข้มสำหรับตัวอักษรและปุ่มทึบที่ใช้ตัวอักษรสีขาว
+
+สีเขียวและแดงยังสงวนให้ความหมายฝาก–ถอน ส่วนโทน warning/pending ย้ายไปที่ hue ~58 (ส้มอำพัน) เพื่อไม่ให้ชนกับสีทองของแบรนด์
 
 ```css
---color-bg: oklch(0.985 0.003 40);
---color-surface: oklch(0.97 0.005 40);
---color-ink: oklch(0.18 0.008 40);
---color-muted: oklch(0.5 0.01 40);
---color-primary: oklch(0.67 0.13 40);
---color-primary-strong: oklch(0.49 0.12 35);
+--color-bg: oklch(0.985 0.004 88);
+--color-surface: oklch(0.97 0.007 88);
+--color-ink: oklch(0.19 0.009 88);
+--color-muted: oklch(0.5 0.012 88);
+--color-primary: oklch(0.75 0.115 90);
+--color-primary-strong: oklch(0.455 0.08 84);
+--color-on-primary: oklch(0.24 0.045 84);
 ```
 
 ## Typography
