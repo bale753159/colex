@@ -2,6 +2,7 @@
 
 import {
   ArrowDownLeft,
+  Check,
   ArrowLeftRight,
   ArrowUpRight,
   CalendarDays,
@@ -10,6 +11,7 @@ import {
   RefreshCcw,
   Search,
   ShieldCheck,
+  UserPlus,
   UserRound,
   X,
 } from "lucide-react";
@@ -17,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import AppShell from "@/app/components/app-shell";
 import C2CDepositFlowDialog from "@/app/components/c2c-deposit-flow-dialog";
 import C2CWithdrawalFlowDialog from "@/app/components/c2c-withdrawal-flow-dialog";
+import CustomerCreateDialog from "@/app/components/customer-create-dialog";
 import type { CustomersResponse, TransactionKind } from "@/lib/types";
 
 const currency = new Intl.NumberFormat("th-TH", {
@@ -57,6 +60,8 @@ export default function CustomersPage() {
   const [loadError, setLoadError] = useState("");
   const [dialogCustomerId, setDialogCustomerId] = useState<string | null>(null);
   const [kind, setKind] = useState<TransactionKind | null>(null);
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [toast, setToast] = useState("");
 
   const loadCustomers = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -115,7 +120,10 @@ export default function CustomersPage() {
             <div className="heading-with-count"><h1>รายชื่อลูกค้า</h1>{summary && <span>{summary.customerCount} บัญชี</span>}</div>
             <p>ตรวจสอบยอดคงเหลือและจัดการเงินของลูกค้าแต่ละราย</p>
           </div>
-          <button className="button deposit-button" onClick={() => openTransaction()} disabled={!data?.customers.length}><CircleDollarSign size={18} />ทำรายการใหม่</button>
+          <div className="heading-actions">
+            <button className="button secondary-button" onClick={() => setCreatingCustomer(true)}><UserPlus size={18} />เพิ่มลูกค้า</button>
+            {/* <button className="button deposit-button" onClick={() => openTransaction()} disabled={!data?.customers.length}><CircleDollarSign size={18} />ทำรายการใหม่</button> */}
+          </div>
         </section>
 
         <section className="customer-summary" aria-label="ภาพรวมลูกค้า">
@@ -215,6 +223,19 @@ export default function CustomersPage() {
         </div>
       )}
 
+      {creatingCustomer && (
+        <CustomerCreateDialog
+          onClose={() => setCreatingCustomer(false)}
+          onCreated={(customer) => {
+            setCreatingCustomer(false);
+            setToast(`เพิ่มลูกค้า ${customer.name} · ${customer.account} แล้ว`);
+            void loadCustomers();
+            window.setTimeout(() => setToast(""), 3_600);
+          }}
+        />
+      )}
+
+      {toast && <div className="toast" role="status"><span><Check size={16} /></span>{toast}</div>}
     </AppShell>
   );
 }

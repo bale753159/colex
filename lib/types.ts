@@ -66,6 +66,16 @@ export type TransactionsResponse = {
   summary: FinanceSummary;
 };
 
+export type CreateCustomerInput = {
+  name: string;
+  bankCode: string;
+  bankAccountNo: string;
+  balance: number;
+  withdrawableBalance: number;
+  phone?: string;
+  email?: string;
+};
+
 export type CreateTransactionInput = {
   customerId: string;
   kind: TransactionKind;
