@@ -7,3 +7,9 @@ node_modules/
 
 # git worktrees ที่ Claude Code สร้าง — เป็นสำเนา repo ทั้งก้อน ไม่ควร commit
 .claude/worktrees/
+
+# Cloudflare / OpenNext
+.open-next/
+.wrangler/
+cloudflare-env.d.ts
+.dev.vars*

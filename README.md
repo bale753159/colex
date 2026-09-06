@@ -1,4 +1,4 @@
-# KLANG Finance Dashboard
+# ITStore Finance Dashboard
 
 ระบบจำลองงานการเงินสำหรับแอดมิน สร้างด้วย Next.js และ Postgres (Supabase)
 
@@ -37,6 +37,55 @@ C2C ของ Celox บันทึก local ledger เป็น `pending` ก�
    > ฐานข้อมูลที่สร้างไว้ก่อนหน้านี้รัน `0002_customer_bank_account.sql` ทับได้เลย — ไฟล์ใช้ `ADD COLUMN IF NOT EXISTS` และ `UPDATE` เฉพาะแถวที่ยังไม่ผูกบัญชี
 
 ระหว่างพัฒนา ทดสอบ (`npm test`) รันบน [PGlite](https://pglite.dev) ในหน่วยความจำโดยไม่ต้องมี `DATABASE_URL` จริง
+
+## Deploy ขึ้น Cloudflare
+
+Deploy เป็น **Cloudflare Worker** ผ่าน [`@opennextjs/cloudflare`](https://opennext.js.org/cloudflare) ไม่ใช่ Cloudflare Pages — Pages ใช้ `@cloudflare/next-on-pages` ซึ่งบังคับให้ route handler ทุกตัวรันบน edge runtime แต่แอปนี้ต้องการ Node runtime เพื่อเปิด TCP socket คุยกับ Postgres ปัจจุบัน Cloudflare ก็แนะนำ Workers เป็นทางหลักของ Next.js แล้ว
+
+ทุก push เข้า `main` จะรัน `.github/workflows/deploy.yml` ซึ่ง lint → typecheck → test → build → `wrangler deploy` ถ้าสเต็ปตรวจสอบพัง จะไม่ deploy
+
+### ตั้งค่าครั้งเดียว
+
+1. **สร้าง API token** ที่ Cloudflare dashboard → My Profile → API Tokens → Create Token → template **Edit Cloudflare Workers** (ต้องมีสิทธิ์ `Workers Scripts: Edit` และ `Account Settings: Read`)
+
+2. **ใส่ GitHub secrets** ที่ repo → Settings → Secrets and variables → Actions
+
+   | Secret | ค่า |
+   | --- | --- |
+   | `CLOUDFLARE_API_TOKEN` | token จากข้อ 1 |
+   | `CLOUDFLARE_ACCOUNT_ID` | Account ID จากหน้า Workers & Pages |
+
+3. **ใส่ secret ของแอปลง Worker** (ทำครั้งเดียว ไม่ผ่าน CI — CI ไม่จำเป็นต้องเห็นค่าเหล่านี้)
+
+   ```bash
+   npx wrangler secret put DATABASE_URL          # Session pooler ของ Supabase (ดูหัวข้อด้านบน)
+   npx wrangler secret put CELOX_CLIENT_ID
+   npx wrangler secret put CELOX_CLIENT_SECRET
+   npx wrangler secret put CELOX_BASE_URL
+   npx wrangler secret put CELOX_UPLOAD_ORIGIN
+   npx wrangler secret put CELOX_CALLBACK_SECRET     # ถ้าแยกจาก CELOX_CLIENT_SECRET
+   npx wrangler secret put CELOX_C2C_CALLBACK_SECRET # ถ้าแยกจาก CELOX_CALLBACK_SECRET
+   ```
+
+   `compatibility_date` ใน `wrangler.jsonc` ตั้งไว้หลัง 2025-04-01 จึงเปิด `nodejs_compat_populate_process_env` อัตโนมัติ secret ทุกตัวโผล่ใน `process.env` โดยไม่ต้องแก้โค้ด และ `next build` ไม่ต้องใช้ค่าพวกนี้เลยเพราะทุกตัวถูกอ่านตอน request
+
+4. **แจ้ง callback URL ใหม่ให้ Celox** ชี้มาที่โดเมนของ Worker (`https://itstore-finance.<subdomain>.workers.dev/api/celox/callback` และ `/api/celox/c2c/callback`)
+
+### รันในเครื่อง
+
+```bash
+npm run cf:preview   # build เป็น Worker แล้วเปิดด้วย workerd จริง
+npm run cf:deploy    # deploy ด้วยมือ ข้าม CI
+npm run cf:typegen   # สร้าง type ของ binding ลง cloudflare-env.d.ts
+```
+
+ต้องใช้ **Node 22 ขึ้นไป** — wrangler 4 ไม่รองรับ Node 20 (`npm run dev` กับ `npm test` ยังใช้ Node 20 ได้ปกติ)
+
+### ข้อควรทราบ
+
+- `lib/sql.ts` สร้าง `pg.Pool` ที่ `max: 10` ต่อหนึ่ง isolate ของ Worker ซึ่งอาจเปิด connection ไปที่ Supabase มากกว่าที่คาดเมื่อ traffic กระจายหลาย isolate ถ้าเริ่มชน connection limit ให้ย้ายไปใช้ [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) ซึ่ง pool ให้ที่ฝั่ง Cloudflare (ต้องแก้ `createPgDriver` ให้อ่าน connection string จาก binding แทน `process.env.DATABASE_URL`)
+- `pg` เลือก socket implementation ตาม export condition ของ workerd จึงต้องมี `outputFileTracingIncludes` ใน `next.config.ts` ไม่งั้น esbuild ของ OpenNext จะ resolve `pg-cloudflare` ไม่เจอ
+- PGlite เป็น devDependency ที่ import ผ่านตัวแปร (`PGLITE_MODULE` ใน `lib/sql.ts`) เพื่อไม่ให้ bundler ลากเข้า production bundle — ถ้าเปลี่ยนกลับเป็น static import จะได้ worker ที่ใหญ่ขึ้นและมี `eval` ที่ Workers ห้าม
 
 ## API ที่เตรียมไว้
 

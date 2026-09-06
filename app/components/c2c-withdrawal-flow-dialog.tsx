@@ -310,7 +310,7 @@ export default function C2CWithdrawalFlowDialog({
           <div className="review-content deposit-review">
             <div className="review-amount"><span>ยอดถอน C2C</span><strong>{currency.format(requestBody.amount)}</strong></div>
             <dl><div><dt>ลูกค้า</dt><dd>{customer.name}<small>{customer.account}</small></dd></div><div><dt>บัญชีปลายทาง</dt><dd>{requestBody.destinationAccountName}<small>{BANK_NAME_MAP[requestBody.destinationBankCode]} · {requestBody.destinationAccountNo}</small></dd></div><div><dt>เวลารอจับคู่</dt><dd>{requestBody.matchTtlSeconds ? `${requestBody.matchTtlSeconds / 60} นาที` : "ค่ากลางของระบบ"}</dd></div><div><dt>Reference ID</dt><dd>{requestBody.referenceId}</dd></div></dl>
-            <div className="deposit-clarification warning"><WalletCards size={18} /><span><strong>Celox จะกันเงินต้นและค่าธรรมเนียมทันที</strong> KLANG จะกันยอดเงินต้นของลูกค้าเพื่อป้องกันการใช้ซ้ำระหว่างรอ</span></div>
+            <div className="deposit-clarification warning"><WalletCards size={18} /><span><strong>Celox จะกันเงินต้นและค่าธรรมเนียมทันที</strong> ITStore จะกันยอดเงินต้นของลูกค้าเพื่อป้องกันการใช้ซ้ำระหว่างรอ</span></div>
             <div className="dialog-actions deposit-actions"><button className="button secondary-button" type="button" onClick={() => setPhase("form")} disabled={phase === "creating"}><ArrowLeft size={16} />แก้ไขข้อมูล</button><button className="button deposit-button" type="button" onClick={() => void createWithdrawal()} disabled={phase === "creating"}>{phase === "creating" ? <><LoaderCircle className="spin" size={17} />กำลังกันยอดและสร้าง…</> : "ยืนยันสร้างรายการ"}</button></div>
           </div>
         )}

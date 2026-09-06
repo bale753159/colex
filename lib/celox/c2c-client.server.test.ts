@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkC2CTransaction, createC2CWithdrawal } from "./c2c-client.server";
+import { attachC2CDepositSlip, checkC2CTransaction, createC2CWithdrawal } from "./c2c-client.server";
 import type { CreateC2CWithdrawalRequest } from "./types";
 
 function transactionFixture(overrides: Record<string, unknown> = {}) {
@@ -32,7 +32,9 @@ function transactionFixture(overrides: Record<string, unknown> = {}) {
 }
 
 function stubFetchJson(body: unknown, status = 200) {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status })));
+  const spy = vi.fn(async () => new Response(JSON.stringify(body), { status }));
+  vi.stubGlobal("fetch", spy);
+  return spy;
 }
 
 beforeEach(() => {
@@ -132,5 +134,66 @@ describe("createC2CWithdrawal", () => {
       await expect(createC2CWithdrawal({ ...withdrawalInput(), amount: 100 }))
         .rejects.toMatchObject({ code: "invalid_response" });
     }
+  });
+});
+
+// workerd ปฏิเสธ redirect: "error" ด้วย TypeError ตั้งแต่ก่อนเปิด socket ("won't be implemented
+// since it does not make sense at the edge") ทำให้ทุกคำขอที่ยิงหา Celox จาก Worker ตายที่ catch
+// ของ fetch แล้วถูกรายงานเป็น network_error / 502 ทั้งที่ยังไม่มีอะไรถูกส่งออกไปเลย
+// เทสต์นี้ล็อก init ที่ต้องใช้ได้ทั้งบน Node และ workerd ไว้
+describe("fetch init ต้องรันได้บน workerd", () => {
+  const VALID_REDIRECT = ["follow", "manual", undefined];
+
+  function initOf(spy: ReturnType<typeof vi.fn>) {
+    return spy.mock.calls[0]?.[1] as RequestInit | undefined;
+  }
+
+  it("createC2CWithdrawal ไม่ใช้ redirect: \"error\"", async () => {
+    const spy = stubFetchJson({
+      transactionId: "01a07093-e092-7dd8-9d5c-0493347cafa7",
+      orderId: "WTH-C2C-1",
+      referenceId: "KLANG-C2C-WD-TEST",
+      transactionStatus: "PENDING",
+      amount: 100,
+      feeAmount: 2,
+      reservedAmount: 2,
+      awaitingManualReview: false,
+      matchDeadline: "2026-09-05T08:03:54.593Z",
+    });
+    await createC2CWithdrawal({
+      amount: 100,
+      destinationBankCode: "004" as const,
+      destinationAccountName: "วรพงษ์ มณีสอน",
+      destinationAccountNo: "1203967744",
+      matchTtlSeconds: 900,
+      referenceId: "KLANG-C2C-WD-TEST",
+    });
+    expect(VALID_REDIRECT).toContain(initOf(spy)?.redirect);
+  });
+
+  it("attachC2CDepositSlip ไม่ใช้ redirect: \"error\"", async () => {
+    const spy = stubFetchJson({
+      transactionId: "01a07093-e092-7dd8-9d5c-0493347cafa7",
+      orderId: "DEP-1",
+      transactionStatus: "SUCCESS",
+      slipVerification: { outcome: "verified" },
+      counterparty: null,
+    });
+    await attachC2CDepositSlip(
+      "01a07093-e092-7dd8-9d5c-0493347cafa7",
+      new File([new Uint8Array([1, 2, 3])], "slip.jpg", { type: "image/jpeg" }),
+    );
+    expect(VALID_REDIRECT).toContain(initOf(spy)?.redirect);
+  });
+
+  // redirect: "manual" คืน response 3xx มาแทนที่จะโยน จึงต้องปฏิเสธเองให้ได้ผลเท่าเดิม:
+  // ห้ามเดินตาม redirect ของคำขอที่ลงลายเซ็นไว้ และห้ามอ่าน body ของมันเป็นคำตอบที่ใช้ได้
+  it("ปฏิเสธ 3xx จาก Celox แทนที่จะเดินตามหรืออ่านเป็นคำตอบ", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, {
+      status: 302,
+      headers: { Location: "https://attacker.example/" },
+    })));
+    await expect(checkC2CTransaction("TXN-2608-00994"))
+      .rejects.toMatchObject({ code: "invalid_response" });
   });
 });

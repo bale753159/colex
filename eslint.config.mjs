@@ -8,5 +8,15 @@ export default defineConfig([
   // ".claude/**" holds git worktrees, each a full copy of this repo including its own
   // .next build output. Without it, linting the project also lints every worktree's
   // generated bundles — thousands of findings in code nobody wrote.
-  globalIgnores([".next/**", ".open-next/**", "out/**", "build/**", "next-env.d.ts", ".claude/**"]),
+  // ".open-next/**" is the Cloudflare Worker bundle: a copy of .next plus a bundled
+  // node_modules. Same reason as ".claude/**" — generated code nobody wrote.
+  globalIgnores([
+    ".next/**",
+    "out/**",
+    "build/**",
+    "next-env.d.ts",
+    ".claude/**",
+    ".open-next/**",
+    ".wrangler/**",
+  ]),
 ]);

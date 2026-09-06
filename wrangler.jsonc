@@ -23,4 +23,8 @@
       "routes": [{ "pattern": "mobile-store.celox.app", "custom_domain": true }]
     }
   }
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> origin/main

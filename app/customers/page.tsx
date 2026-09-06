@@ -3,17 +3,14 @@
 import {
   ArrowDownLeft,
   Check,
-  ArrowLeftRight,
   ArrowUpRight,
   CalendarDays,
-  CircleDollarSign,
   Clock3,
   RefreshCcw,
   Search,
   ShieldCheck,
   UserPlus,
   UserRound,
-  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AppShell from "@/app/components/app-shell";
@@ -27,17 +24,6 @@ const currency = new Intl.NumberFormat("th-TH", {
   currency: "THB",
   minimumFractionDigits: 2,
 });
-
-const transactionOptions: Array<{
-  kind: TransactionKind;
-  title: string;
-  description: string;
-  icon: typeof ArrowDownLeft;
-  tone: "deposit" | "withdraw" | "c2c";
-}> = [
-  { kind: "deposit_c2c", title: "ฝากแบบ C2C", description: "จับคู่บัญชีรับเงินและแนบสลิปผ่าน Celox", icon: ArrowLeftRight, tone: "c2c" },
-  { kind: "withdraw_c2c", title: "ถอนแบบ C2C", description: "กันยอดแล้วรอผู้ฝากที่มียอดเท่ากัน", icon: ArrowLeftRight, tone: "c2c" },
-];
 
 function formatActivity(value: string | null) {
   if (!value) return "ยังไม่มีรายการ";
@@ -96,18 +82,14 @@ export default function CustomersPage() {
     [data?.allCustomers, dialogCustomerId],
   );
 
-  function openTransaction(customerId?: string) {
-    setDialogCustomerId(customerId ?? data?.customers[0]?.id ?? null);
-    setKind(null);
+  function openTransaction(customerId: string, nextKind: TransactionKind) {
+    setDialogCustomerId(customerId);
+    setKind(nextKind);
   }
 
   function closeDialog() {
     setDialogCustomerId(null);
     setKind(null);
-  }
-
-  function chooseKind(nextKind: TransactionKind) {
-    setKind(nextKind);
   }
 
   const summary = data?.summary;
@@ -122,7 +104,6 @@ export default function CustomersPage() {
           </div>
           <div className="heading-actions">
             <button className="button secondary-button" onClick={() => setCreatingCustomer(true)}><UserPlus size={18} />เพิ่มลูกค้า</button>
-            {/* <button className="button deposit-button" onClick={() => openTransaction()} disabled={!data?.customers.length}><CircleDollarSign size={18} />ทำรายการใหม่</button> */}
           </div>
         </section>
 
@@ -169,7 +150,8 @@ export default function CustomersPage() {
                     <td><div className="last-activity"><Clock3 size={15} /><span>{formatActivity(customer.lastActivity)}</span></div></td>
                     <td>
                       <div className="customer-row-actions">
-                        <button type="button" className="button row-transaction-button" onClick={() => openTransaction(customer.id)}>ทำรายการ</button>
+                        <button type="button" className="button row-transaction-button deposit" onClick={() => openTransaction(customer.id, "deposit_c2c")}><ArrowDownLeft size={15} />ฝาก C2C</button>
+                        <button type="button" className="button row-transaction-button withdraw" onClick={() => openTransaction(customer.id, "withdraw_c2c")}><ArrowUpRight size={15} />ถอน C2C</button>
                       </div>
                     </td>
                   </tr>
@@ -199,28 +181,6 @@ export default function CustomersPage() {
           onClose={() => closeDialog()}
           onChanged={() => void loadCustomers()}
         />
-      )}
-
-      {dialogCustomerId && selectedCustomer && !kind && (
-        <div className="dialog-layer" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && closeDialog()}>
-          <section className="transaction-dialog customer-dialog" role="dialog" aria-modal="true" aria-labelledby="customer-dialog-title">
-            <div className="dialog-header">
-              <div><span className="dialog-icon brand"><CircleDollarSign size={20} /></span><div><h2 id="customer-dialog-title">เลือกรูปแบบรายการ</h2><p>{selectedCustomer.name} · {selectedCustomer.account}</p></div></div>
-              <button className="icon-button" onClick={() => closeDialog()} aria-label="ปิด"><X size={20} /></button>
-            </div>
-
-            <div className="transaction-kind-picker">
-              <p>เลือกวิธีจัดการยอดเงินสำหรับลูกค้ารายนี้</p>
-              <div className="kind-grid">
-                {transactionOptions.map((option) => {
-                  const Icon = option.icon;
-                  return <button key={option.kind} onClick={() => chooseKind(option.kind)}><span className={`kind-icon ${option.tone}`}><Icon size={19} /></span><span><strong>{option.title}</strong><small>{option.description}</small></span><ArrowUpRight size={15} /></button>;
-                })}
-              </div>
-              <div className="c2c-explainer"><ArrowLeftRight size={17} /><span><strong>Celox C2C ทำงานอย่างไร?</strong> ระบบจับคู่ฝาก–ถอนที่ยอดเท่ากัน ฝั่งฝากเห็นบัญชีปลายทางเฉพาะตอนโอน ส่วนฝั่งถอนไม่เห็นข้อมูลคู่รายการ</span></div>
-            </div>
-          </section>
-        </div>
       )}
 
       {creatingCustomer && (

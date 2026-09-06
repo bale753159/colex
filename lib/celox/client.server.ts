@@ -357,6 +357,20 @@ function jitteredBackoff(attempt: number) {
   return Math.floor(Math.random() * (ceiling + 1));
 }
 
+/**
+ * workerd ไม่รับ `redirect: "error"` — มันโยน TypeError ตั้งแต่ก่อนเปิด socket
+ * ("won't be implemented since it does not make sense at the edge") ทำให้ทุกคำขอที่ยิงหา Celox
+ * จาก Cloudflare Worker ตกลง catch ของ fetch แล้วถูกรายงานเป็น network_error / 502 ทั้งที่
+ * ยังไม่มีอะไรถูกส่งออกไป จึงต้องใช้ `redirect: "manual"` ซึ่งรองรับทั้งบน Node และ workerd
+ * แล้วปฏิเสธ 3xx เองให้ได้ผลเท่าเดิม: คำขอที่ลงลายเซ็นไว้ต้องไม่ถูกส่งต่อไปยังปลายทางอื่น
+ * และ body ของ redirect ต้องไม่ถูกอ่านเป็นคำตอบที่ใช้ได้
+ */
+const NO_FOLLOW_REDIRECT = "manual" as const;
+
+function isRedirect(response: Response): boolean {
+  return response.status >= 300 && response.status < 400;
+}
+
 export async function createDeposit(input: CreateDepositRequest): Promise<CreateDepositResponse> {
   const config = getConfig();
   const url = new URL(`${config.baseUrl}${CREATE_DEPOSIT_PATH}`);
@@ -382,7 +396,7 @@ export async function createDeposit(input: CreateDepositRequest): Promise<Create
         },
         body: rawBody,
         cache: "no-store",
-        redirect: "error",
+        redirect: NO_FOLLOW_REDIRECT,
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (cause) {
@@ -399,6 +413,14 @@ export async function createDeposit(input: CreateDepositRequest): Promise<Create
         message: "เชื่อมต่อ Celox ไม่สำเร็จ ผลการสร้างรายการอาจไม่แน่นอน กรุณาอย่าสร้างซ้ำ",
         httpStatus: 502,
         cause,
+      });
+    }
+
+    if (isRedirect(response)) {
+      throw new CeloxError({
+        code: "invalid_response",
+        message: "Celox ตอบกลับด้วย redirect ระหว่างสร้างรายการฝาก ซึ่งระบบไม่เดินตาม กรุณาอย่าสร้างซ้ำ",
+        httpStatus: 502,
       });
     }
 
@@ -595,7 +617,7 @@ async function callWithdrawalEndpoint<T>(options: {
         },
         body: rawBody,
         cache: "no-store",
-        redirect: "error",
+        redirect: NO_FOLLOW_REDIRECT,
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (cause) {
@@ -609,6 +631,15 @@ async function callWithdrawalEndpoint<T>(options: {
           : `เชื่อมต่อ Celox ไม่สำเร็จ ผลการ${action}รายการถอนอาจไม่แน่นอน กรุณาอย่าส่งซ้ำ`,
         httpStatus: timedOut ? 504 : 502,
         cause,
+      });
+    }
+
+    if (isRedirect(response)) {
+      const action = options.operation === "create" ? "สร้าง" : "ยืนยัน";
+      throw new CeloxError({
+        code: "invalid_response",
+        message: `Celox ตอบกลับด้วย redirect ระหว่าง${action}รายการถอน ซึ่งระบบไม่เดินตาม กรุณาอย่าส่งซ้ำ`,
+        httpStatus: 502,
       });
     }
 

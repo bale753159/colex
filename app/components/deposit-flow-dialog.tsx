@@ -656,7 +656,7 @@ export default function DepositFlowDialog({ customer, customers, onCustomerChang
 
         {phase === "form" && (
           <form className="transaction-form deposit-form" onSubmit={handleReview} noValidate>
-            <label htmlFor="deposit-customer"><span>ลูกค้าในระบบ</span><div className="select-wrap"><select id="deposit-customer" value={customer.id} onChange={(event) => changeCustomer(event.target.value)}>{customers.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.account}</option>)}</select><ChevronDown size={17} /></div><small>ใช้รักษาบริบทใน KLANG และจะไม่ถูกส่งไปกับคำขอ Celox</small></label>
+            <label htmlFor="deposit-customer"><span>ลูกค้าในระบบ</span><div className="select-wrap"><select id="deposit-customer" value={customer.id} onChange={(event) => changeCustomer(event.target.value)}>{customers.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.account}</option>)}</select><ChevronDown size={17} /></div><small>ใช้รักษาบริบทในระบบ ITStore และจะไม่ถูกส่งไปกับคำขอ Celox</small></label>
 
             <div className="deposit-field-grid">
               <label htmlFor="deposit-amount">
