@@ -11,9 +11,8 @@ import {
   Users,
   X,
 } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
-import logo from "@/app/logo-it.png";
+import BrandMark from "./brand-mark";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 type AppShellProps = {
@@ -51,8 +50,8 @@ export default function AppShell({ active, searchValue, onSearchChange, searchPl
     <div className="app-shell">
       <aside className={`sidebar ${mobileNav ? "open" : ""}`}>
         <div className="brand">
-          <Image className="brand-mark" src={logo} alt="" width={40} height={40} priority />
-          <span><strong>ITStore</strong><small>TECH FOR A BETTER YOU</small></span>
+          <BrandMark size={40} />
+          <span><strong>mobile-store</strong><small>TECH FOR A BETTER YOU</small></span>
           <button className="icon-button sidebar-close" onClick={() => setMobileNav(false)} aria-label="ปิดเมนู"><X size={20} /></button>
         </div>
 
@@ -75,7 +74,8 @@ export default function AppShell({ active, searchValue, onSearchChange, searchPl
         <header className="topbar">
           <div className="mobile-brand-wrap">
             <button className="icon-button menu-button" onClick={() => setMobileNav(true)} aria-label="เปิดเมนู"><Menu size={21} /></button>
-            <Image className="brand-mark small" src={logo} alt="ITStore" width={32} height={32} priority />
+            <BrandMark size={32} className="brand-mark small" />
+            <span className="sr-only">mobile-store</span>
           </div>
           <label className="global-search">
             <Search size={18} />
@@ -86,8 +86,8 @@ export default function AppShell({ active, searchValue, onSearchChange, searchPl
             <button className="icon-button notification-button" aria-label="การแจ้งเตือน"><Bell size={19} /><span /></button>
             <div className="user-divider" />
             <button className="profile-button" aria-label="เมนูผู้ใช้">
-              <span className="avatar admin">ก</span>
-              <span className="profile-copy"><strong>กนกวรรณ</strong><small>Finance Admin</small></span>
+              <span className="avatar admin">ธ</span>
+              <span className="profile-copy"><strong>ธนกฤต</strong><small>Finance Admin</small></span>
               <ChevronDown size={16} />
             </button>
           </div>
