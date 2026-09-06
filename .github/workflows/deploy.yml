@@ -1,0 +1,54 @@
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+  # กดรันเองได้จากแท็บ Actions เวลาต้อง redeploy โดยไม่มีคอมมิตใหม่
+  workflow_dispatch:
+
+# ปล่อยให้คิวเดียวต่อ branch: ถ้า push ซ้อนกัน ตัวเก่าจะถูกยกเลิก
+# ไม่ใช้ cancel-in-progress กับ deploy ที่กำลัง upload อยู่ เลยตั้ง false
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # wrangler 4 ต้องการ Node 22 ขึ้นไป
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # กันไม่ให้ main ที่พังหลุดขึ้น production
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      # next build + แปลงเป็น Worker bundle ที่ .open-next/
+      # ไม่ต้องใช้ secret ของแอปตอน build เพราะ env ทุกตัวถูกอ่านตอน request
+      - name: Build worker bundle
+        run: npm run cf:build
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # build ไปแล้วในสเต็ปก่อนหน้า สั่ง deploy อย่างเดียว
+          command: deploy

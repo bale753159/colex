@@ -15,7 +15,7 @@ export default defineConfig({
     // tests included. Without this, `vitest` collects every test file twice — once from
     // here and once from each worktree — and the duplicated PGlite instances exhaust the
     // machine and fail. Exclude the whole directory rather than any one worktree name.
-    exclude: [...configDefaults.exclude, "**/.claude/**"],
+    exclude: [...configDefaults.exclude, "**/.claude/**", "**/.open-next/**"],
     // Several test files each boot their own PGlite (WASM Postgres) instance and apply
     // supabase/migrations/0001_init.sql in beforeAll. That genuinely takes a few seconds,
     // and vitest's fork pool runs those files' beforeAll hooks concurrently — on a loaded

@@ -203,8 +203,13 @@ async function createPgDriver(): Promise<Driver> {
   };
 }
 
+// ใช้เฉพาะเทสต์ (KLANG_TEST_PG=pglite) และ pglite เป็น devDependency
+// specifier ต้องเป็นตัวแปรเพื่อไม่ให้ bundler ของ Turbopack/esbuild ลาก PGlite
+// (~500KB + emscripten eval ที่ Workers ห้าม) เข้า production bundle ของ Cloudflare
+const PGLITE_MODULE = "@electric-sql/pglite";
+
 async function createPgliteDriver(): Promise<Driver> {
-  const { PGlite } = await import("@electric-sql/pglite");
+  const { PGlite } = (await import(/* webpackIgnore: true */ PGLITE_MODULE)) as typeof import("@electric-sql/pglite");
   const client = new PGlite({
     parsers: {
       [OID_INT8]: toSafeInt,
