@@ -2,8 +2,8 @@ import "@fontsource-variable/noto-sans-thai";
 import "./globals.css";
 
 export const metadata = {
-  title: "KLANG — ภาพรวมการเงิน",
-  description: "ระบบจัดการฝาก ถอน และรายการธุรกรรมสำหรับแอดมิน",
+  title: "ITStore — ระบบการเงินร้านไอที",
+  description: "ระบบจัดการยอดคงเหลือ ฝาก–ถอน และรายการ C2C ของบัญชีลูกค้าและตัวแทนจำหน่าย ITStore",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

@@ -11,7 +11,9 @@ import {
   Users,
   X,
 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
+import logo from "@/app/logo-it.png";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 type AppShellProps = {
@@ -49,8 +51,8 @@ export default function AppShell({ active, searchValue, onSearchChange, searchPl
     <div className="app-shell">
       <aside className={`sidebar ${mobileNav ? "open" : ""}`}>
         <div className="brand">
-          <span className="brand-mark">K</span>
-          <span><strong>KLANG</strong><small>FINANCE OPS</small></span>
+          <Image className="brand-mark" src={logo} alt="" width={40} height={40} priority />
+          <span><strong>ITStore</strong><small>TECH FOR A BETTER YOU</small></span>
           <button className="icon-button sidebar-close" onClick={() => setMobileNav(false)} aria-label="ปิดเมนู"><X size={20} /></button>
         </div>
 
@@ -73,7 +75,7 @@ export default function AppShell({ active, searchValue, onSearchChange, searchPl
         <header className="topbar">
           <div className="mobile-brand-wrap">
             <button className="icon-button menu-button" onClick={() => setMobileNav(true)} aria-label="เปิดเมนู"><Menu size={21} /></button>
-            <span className="brand-mark small">K</span>
+            <Image className="brand-mark small" src={logo} alt="ITStore" width={32} height={32} priority />
           </div>
           <label className="global-search">
             <Search size={18} />
