@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "itstore-finance",
+  "name": "itstore-finance-tom",
   "main": ".open-next/worker.js",
   // ≥ 2025-04-01 ทำให้ nodejs_compat_populate_process_env เปิดอัตโนมัติ
   // vars และ secrets ของ Worker จึงโผล่ใน process.env โดยไม่ต้องแก้โค้ด
