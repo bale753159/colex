@@ -5,8 +5,8 @@ import {
   ArrowLeft,
   ArrowUpRight,
   Check,
-  CheckCircle2,
   ChevronDown,
+  CheckCircle2,
   Hourglass,
   LoaderCircle,
   RefreshCcw,
@@ -16,10 +16,11 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { BANK_NAME_MAP, BANK_OPTIONS } from "@/lib/celox/banks";
+import { BANK_NAME_MAP } from "@/lib/celox/banks";
 import { c2cStatusDescription, c2cStatusLabel, c2cStatusTone } from "@/lib/celox/c2c-display";
 import type {
   C2CMatchTtlSeconds,
+  C2CTransactionResponse,
   CancelC2CTransactionResponse,
   CeloxErrorResponse,
   CeloxFieldError,
@@ -31,16 +32,16 @@ import type { Customer } from "@/lib/types";
 type Phase = "form" | "review" | "creating" | "result" | "cancelled" | "error" | "uncertain";
 type FormState = {
   amount: string;
-  destinationBankCode: string;
-  destinationAccountName: string;
-  destinationAccountNo: string;
   matchTtlSeconds: C2CMatchTtlSeconds;
-  referenceId: string;
 };
+
+// บัญชีปลายทางคือบัญชีธนาคารของลูกค้าแถวที่กด (supabase/migrations/0002) และ
+// Reference ID ระบบออกให้ เจ้าหน้าที่จึงกรอกแค่ยอดเงิน
+const QUICK_AMOUNTS = [50, 100, 150, 200, 300, 400, 500, 1000] as const;
+
+const DEFAULT_MATCH_TTL_SECONDS: C2CMatchTtlSeconds = 900;
 type Props = {
   customer: Customer;
-  customers: Customer[];
-  onCustomerChange: (customerId: string) => void;
   onClose: () => void;
   onChanged: () => void;
 };
@@ -68,29 +69,28 @@ function fieldMessage(error: CeloxFieldError) {
 
 export default function C2CWithdrawalFlowDialog({
   customer,
-  customers,
-  onCustomerChange,
   onClose,
   onChanged,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [phase, setPhase] = useState<Phase>("form");
-  const [form, setForm] = useState<FormState>({
-    amount: "",
-    destinationBankCode: "",
-    destinationAccountName: "",
-    destinationAccountNo: "",
-    matchTtlSeconds: 900,
-    referenceId: makeReference(),
-  });
+  const [form, setForm] = useState<FormState>({ amount: "", matchTtlSeconds: DEFAULT_MATCH_TTL_SECONDS });
+  const [referenceId] = useState(makeReference);
   const [requestBody, setRequestBody] = useState<CreateC2CWithdrawalRequest | null>(null);
   const [withdrawal, setWithdrawal] = useState<CreateC2CWithdrawalResponse | null>(null);
   const [cancelResult, setCancelResult] = useState<CancelC2CTransactionResponse | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [globalError, setGlobalError] = useState("");
   const [failure, setFailure] = useState<CeloxErrorResponse | null>(null);
+  const [pollRevision, setPollRevision] = useState(0);
+  const pollAttemptRef = useRef(0);
+  const onChangedRef = useRef(onChanged);
+  const onCloseRef = useRef(onClose);
   const busy = phase === "creating";
+  const destinationAccountNo = customer.bankAccountNo.replace(/[\s-]/g, "");
+  const destinationBankName = BANK_NAME_MAP[customer.bankCode as keyof typeof BANK_NAME_MAP];
+  const bankReady = Boolean(destinationBankName) && /^\d+$/.test(destinationAccountNo);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -103,6 +103,51 @@ export default function C2CWithdrawalFlowDialog({
   useEffect(() => {
     headingRef.current?.focus();
   }, [phase]);
+
+  useEffect(() => {
+    onChangedRef.current = onChanged;
+    onCloseRef.current = onClose;
+  }, [onChanged, onClose]);
+
+  // หลังสร้างรายการถอนสำเร็จ ระบบตรวจสถานะกับ Celox เป็นระยะ (GET คือข้อมูลอ้างอิงหลัก
+  // ตามหน้ารายการ C2C) พอจับคู่ได้หรือ callback ทำให้รายการจบ ก็ปิดหน้าต่างให้เลย
+  // เจ้าหน้าที่จะได้ไม่ต้องเฝ้ากดปิดเอง
+  const activeReference = withdrawal?.referenceId || withdrawal?.orderId;
+  useEffect(() => {
+    if (phase !== "result" || !activeReference) return;
+    const controller = new AbortController();
+    const delay = Math.min(15_000, 5_000 + pollAttemptRef.current * 2_500);
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/celox/c2c/${encodeURIComponent(activeReference)}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const result = await response.json() as C2CTransactionResponse & CeloxErrorResponse;
+        if (!response.ok) {
+          pollAttemptRef.current += 1;
+          setPollRevision((current) => current + 1);
+          return;
+        }
+        // PENDING_TRANSFER = Celox จับคู่กับผู้ฝากได้แล้ว, SUCCESS/CANCELLED = รายการจบ
+        if (["PENDING_TRANSFER", "SUCCESS", "CANCELLED"].includes(result.transactionStatus)) {
+          onChangedRef.current();
+          onCloseRef.current();
+          return;
+        }
+        pollAttemptRef.current += 1;
+        setPollRevision((current) => current + 1);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        pollAttemptRef.current += 1;
+        setPollRevision((current) => current + 1);
+      }
+    }, delay);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [activeReference, phase, pollRevision]);
 
   function requestClose() {
     if (busy) return;
@@ -123,22 +168,18 @@ export default function C2CWithdrawalFlowDialog({
   function validateForm() {
     const next: Record<string, string> = {};
     const amount = Number(form.amount.replaceAll(",", ""));
-    const accountNo = form.destinationAccountNo.replace(/[\s-]/g, "");
     if (!Number.isFinite(amount) || amount <= 0) next.amount = "กรุณากรอกจำนวนเงินมากกว่า 0 บาท";
     else if (amount > customer.withdrawableBalance) next.amount = "ยอดที่ถอนได้ของลูกค้าไม่เพียงพอ";
-    if (!form.destinationBankCode) next.destinationBankCode = "กรุณาเลือกธนาคารปลายทาง";
-    if (!form.destinationAccountName.trim()) next.destinationAccountName = "กรุณากรอกชื่อบัญชีปลายทาง";
-    if (!/^\d+$/.test(accountNo)) next.destinationAccountNo = "กรุณากรอกเลขบัญชีเป็นตัวเลข";
-    if (!form.referenceId.trim()) next.referenceId = "กรุณาระบุ Reference ID สำหรับติดตามรายการ";
     setFieldErrors(next);
     if (Object.keys(next).length > 0) return null;
+    if (!bankReady) return null;
     const input: CreateC2CWithdrawalRequest = {
       amount,
-      destinationBankCode: form.destinationBankCode as CreateC2CWithdrawalRequest["destinationBankCode"],
-      destinationAccountName: form.destinationAccountName.trim(),
-      destinationAccountNo: accountNo,
+      destinationBankCode: customer.bankCode as CreateC2CWithdrawalRequest["destinationBankCode"],
+      destinationAccountName: customer.name,
+      destinationAccountNo,
       matchTtlSeconds: form.matchTtlSeconds,
-      referenceId: form.referenceId.trim(),
+      referenceId,
     };
     return input;
   }
@@ -237,20 +278,31 @@ export default function C2CWithdrawalFlowDialog({
 
         {phase === "form" && (
           <form className="transaction-form deposit-form" onSubmit={handleReview} noValidate>
-            <label htmlFor="c2c-withdrawal-customer"><span>ลูกค้าในระบบ</span><div className="select-wrap"><select id="c2c-withdrawal-customer" value={customer.id} onChange={(event) => onCustomerChange(event.target.value)}>{customers.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.account} · ถอนได้ {currency.format(item.withdrawableBalance)}</option>)}</select><ChevronDown size={17} /></div><small>ระบบจะกันยอดที่ถอนได้ทันทีเมื่อ Celox สร้างรายการสำเร็จ</small></label>
-            <div className="deposit-field-grid">
-              <label htmlFor="c2c-withdrawal-amount"><span>ยอดที่ต้องการถอน</span><div className={`money-input ${fieldErrors.amount ? "invalid" : ""}`}><span>฿</span><input id="c2c-withdrawal-amount" autoFocus inputMode="decimal" value={form.amount} onChange={(event) => updateField("amount", event.target.value.replace(/[^0-9.,]/g, ""))} placeholder="0.00" aria-invalid={Boolean(fieldErrors.amount)} /></div><small className={fieldErrors.amount ? "field-error" : ""}>{fieldErrors.amount || `ยอดที่ถอนได้ ${currency.format(customer.withdrawableBalance)}`}</small></label>
-              <label htmlFor="c2c-withdrawal-bank"><span>ธนาคารปลายทาง</span><div className={`select-wrap ${fieldErrors.destinationBankCode ? "invalid" : ""}`}><select id="c2c-withdrawal-bank" value={form.destinationBankCode} onChange={(event) => updateField("destinationBankCode", event.target.value)} aria-invalid={Boolean(fieldErrors.destinationBankCode)}><option value="" disabled>เลือกธนาคารผู้รับ</option>{BANK_OPTIONS.map(([code, name]) => <option key={code} value={code}>{name} · {code}</option>)}</select><ChevronDown size={17} /></div><small className={fieldErrors.destinationBankCode ? "field-error" : ""}>{fieldErrors.destinationBankCode || "Celox จะตรวจบัญชีปลายทางกับ blacklist"}</small></label>
+            <div className="c2c-locked-source">
+              <div><span>ลูกค้า / ผู้ถอน</span><strong>{customer.name}</strong><small>{customer.account}</small></div>
+              <div><span>ธนาคารปลายทาง</span><strong>{destinationBankName ?? "ยังไม่ได้ผูกธนาคาร"}</strong><small>{customer.bankCode ? `รหัส ${customer.bankCode}` : "ต้องผูกบัญชีก่อนจึงเปิดรายการได้"}</small></div>
+              <div><span>ชื่อบัญชีปลายทาง</span><strong>{customer.name}</strong><small>ใช้ชื่อลูกค้ารายนี้เสมอ</small></div>
+              <div><span>เลขบัญชีปลายทาง</span><strong>{customer.bankAccountNo || "—"}</strong><small>{bankReady ? "บัญชีที่ผูกไว้กับลูกค้ารายนี้" : "เลขบัญชีต้องเป็นตัวเลข"}</small></div>
+              <div><span>Reference ID</span><strong>{referenceId}</strong><small>ระบบออกให้อัตโนมัติ แก้ไขไม่ได้</small></div>
             </div>
-            <label htmlFor="c2c-withdrawal-name"><span>ชื่อบัญชีปลายทาง</span><input id="c2c-withdrawal-name" value={form.destinationAccountName} onChange={(event) => updateField("destinationAccountName", event.target.value)} placeholder="ชื่อเจ้าของบัญชีผู้รับ" aria-invalid={Boolean(fieldErrors.destinationAccountName)} /><small className={fieldErrors.destinationAccountName ? "field-error" : ""}>{fieldErrors.destinationAccountName || "ฝั่งถอนจะไม่เห็นข้อมูลของคู่ที่จับได้"}</small></label>
-            <label htmlFor="c2c-withdrawal-account"><span>เลขบัญชีปลายทาง</span><input id="c2c-withdrawal-account" inputMode="numeric" value={form.destinationAccountNo} onChange={(event) => updateField("destinationAccountNo", event.target.value.replace(/[^0-9\s-]/g, ""))} placeholder="123-4-56789-0" aria-invalid={Boolean(fieldErrors.destinationAccountNo)} /><small className={fieldErrors.destinationAccountNo ? "field-error" : ""}>{fieldErrors.destinationAccountNo || "ใส่เลขบัญชีตามสมุด ระบบไม่จำกัดจำนวนหลัก"}</small></label>
-            <div className="deposit-field-grid">
-              <label htmlFor="c2c-withdrawal-ttl"><span>เวลารอจับคู่</span><div className="select-wrap"><select id="c2c-withdrawal-ttl" value={form.matchTtlSeconds} onChange={(event) => updateField("matchTtlSeconds", Number(event.target.value) as C2CMatchTtlSeconds)}><option value={60}>1 นาที</option><option value={120}>2 นาที</option><option value={300}>5 นาที</option><option value={600}>10 นาที</option><option value={900}>15 นาที</option><option value={1200}>20 นาที</option></select><ChevronDown size={17} /></div><small>เมื่อหมดเวลา Celox จะคืนยอดที่กันไว้</small></label>
-              <label htmlFor="c2c-withdrawal-reference"><span>Reference ID</span><input id="c2c-withdrawal-reference" value={form.referenceId} onChange={(event) => updateField("referenceId", event.target.value)} aria-invalid={Boolean(fieldErrors.referenceId)} /><small className={fieldErrors.referenceId ? "field-error" : ""}>{fieldErrors.referenceId || "ใช้ค้นหารายการเดิมเมื่อผลเครือข่ายไม่แน่นอน"}</small></label>
+            <label htmlFor="c2c-withdrawal-amount"><span>ยอดที่ต้องการถอน</span><div className={`money-input ${fieldErrors.amount ? "invalid" : ""}`}><span>฿</span><input id="c2c-withdrawal-amount" autoFocus inputMode="decimal" value={form.amount} onChange={(event) => updateField("amount", event.target.value.replace(/[^0-9.,]/g, ""))} placeholder="0.00" aria-invalid={Boolean(fieldErrors.amount)} /></div><small className={fieldErrors.amount ? "field-error" : ""}>{fieldErrors.amount || `ยอดที่ถอนได้ ${currency.format(customer.withdrawableBalance)}`}</small></label>
+            <div className="quick-amounts" role="group" aria-label="เลือกยอดที่ใช้บ่อย">
+              {QUICK_AMOUNTS.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={Number(form.amount.replaceAll(",", "")) === value ? "selected" : ""}
+                  onClick={() => updateField("amount", String(value))}
+                  disabled={value > customer.withdrawableBalance}
+                  title={value > customer.withdrawableBalance ? "เกินยอดที่ถอนได้ของลูกค้า" : undefined}
+                >{value.toLocaleString("th-TH")}</button>
+              ))}
             </div>
+            <label htmlFor="c2c-withdrawal-ttl"><span>เวลารอจับคู่</span><div className="select-wrap"><select id="c2c-withdrawal-ttl" value={form.matchTtlSeconds} onChange={(event) => updateField("matchTtlSeconds", Number(event.target.value) as C2CMatchTtlSeconds)}><option value={60}>1 นาที</option><option value={120}>2 นาที</option><option value={300}>5 นาที</option><option value={600}>10 นาที</option><option value={900}>15 นาที</option><option value={1200}>20 นาที</option></select><ChevronDown size={17} /></div><small>เมื่อหมดเวลา Celox จะคืนยอดที่กันไว้</small></label>
+            {!bankReady && <div className="form-error" role="alert">ลูกค้ารายนี้ยังไม่มีบัญชีธนาคารที่ใช้ได้ในระบบ จึงเปิดรายการถอน C2C ไม่ได้</div>}
             <div className="inline-notice"><ShieldCheck size={18} /><span><strong>เงินถูกกันตั้งแต่สร้างรายการ</strong> ระบบกันยอดที่ถอนได้ของลูกค้าเต็มจำนวนไว้ฝั่งเรา ส่วน reservedAmount ที่ Celox กันคือค่าธรรมเนียมเท่านั้น</span></div>
             {globalError && <div className="form-error" role="alert">{globalError}</div>}
-            <div className="dialog-actions deposit-actions"><button type="button" className="button secondary-button" onClick={requestClose}>ยกเลิก</button><button type="submit" className="button deposit-button">ตรวจสอบข้อมูล</button></div>
+            <div className="dialog-actions deposit-actions"><button type="button" className="button secondary-button" onClick={requestClose}>ยกเลิก</button><button type="submit" className="button deposit-button" disabled={!bankReady}>ตรวจสอบข้อมูล</button></div>
           </form>
         )}
 
@@ -271,6 +323,7 @@ export default function C2CWithdrawalFlowDialog({
             {withdrawal.transactionStatus === "PENDING_MANUAL_C2C" && <div className="deposit-clarification warning"><ShieldAlert size={18} /><span><strong>รายการถูกส่งให้เจ้าหน้าที่ Celox ตรวจสอบ</strong> ยอดที่กันไว้ยังใช้งานไม่ได้ และรายการนี้ยกเลิกเองไม่ได้จนกว่าจะมีผลสถานะใหม่</span></div>}
             <div className="privacy-notice"><ShieldAlert size={18} /><span><strong>ฝั่งถอนไม่ได้รับข้อมูลคู่รายการ</strong> สถานะเปลี่ยนเป็น PENDING_TRANSFER คือข้อมูลทั้งหมดที่ Celox เปิดเผยเมื่อจับคู่แล้ว</span></div>
             {globalError && <div className="form-error" role="alert">{globalError}</div>}
+            <div className="deposit-clarification"><Hourglass size={18} /><span><strong>ระบบกำลังเฝ้าสถานะรายการนี้</strong> เมื่อ Celox จับคู่ผู้ฝากได้หรือรายการจบแล้ว หน้าต่างนี้จะปิดเองอัตโนมัติ</span></div>
             <div className="dialog-actions deposit-actions">{withdrawal.transactionStatus === "PENDING" && <button className="button danger-outline-button" type="button" onClick={() => void cancelWithdrawal()}>ยกเลิกรายการ</button>}<button className="button deposit-button" type="button" onClick={requestClose}>ปิดและดูในรายการ C2C</button></div>
           </div>
         )}

@@ -32,7 +32,9 @@ C2C ของ Celox บันทึก local ledger เป็น `pending` ก�
 
 1. สร้างโปรเจกต์ใหม่ใน Supabase
 2. ไปที่ Project Settings → Database → Connect แล้วคัดลอก connection string ของ **Session pooler** (พอร์ต 5432) — **ห้ามใช้ Transaction pooler** เพราะแอปพึ่ง multi-statement transaction บน connection เดียว (ดู `lib/sql.ts`) ซึ่ง Transaction pooler ไม่รองรับ นำ connection string ไปใส่เป็น `DATABASE_URL` ใน `.env.local`
-3. เปิด SQL Editor ของโปรเจกต์ แล้วรัน `supabase/migrations/0001_init.sql` ตามด้วย `supabase/seed.sql` ตามลำดับ เพื่อสร้างตารางและข้อมูลตัวอย่าง
+3. เปิด SQL Editor ของโปรเจกต์ แล้วรันไฟล์ใน `supabase/migrations/` เรียงตามเลขหน้าไฟล์ (`0001_init.sql`, `0002_customer_bank_account.sql`) ตามด้วย `supabase/seed.sql` เพื่อสร้างตารางและข้อมูลตัวอย่าง
+
+   > ฐานข้อมูลที่สร้างไว้ก่อนหน้านี้รัน `0002_customer_bank_account.sql` ทับได้เลย — ไฟล์ใช้ `ADD COLUMN IF NOT EXISTS` และ `UPDATE` เฉพาะแถวที่ยังไม่ผูกบัญชี
 
 ระหว่างพัฒนา ทดสอบ (`npm test`) รันบน [PGlite](https://pglite.dev) ในหน่วยความจำโดยไม่ต้องมี `DATABASE_URL` จริง
 

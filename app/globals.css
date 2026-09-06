@@ -381,6 +381,20 @@ tbody tr:hover { background: oklch(0.985 0.002 0); }
 .deposit-form input:not(.money-input input):focus { border-color: var(--focus); box-shadow: 0 0 0 3px oklch(0.67 0.13 40 / .14); }
 .deposit-form input[aria-invalid="true"], .money-input.invalid { border-color: var(--danger); }
 .deposit-form .select-wrap.invalid select { border-color: var(--danger); }
+/* ปุ่มยอดที่ใช้บ่อย ใต้ช่องกรอกจำนวนเงินของ modal ฝาก/ถอน C2C */
+.quick-amounts { margin: -10px 0 18px; display: flex; flex-wrap: wrap; gap: 7px; }
+.quick-amounts button { min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: white; color: var(--ink); cursor: pointer; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; transition: background 120ms var(--ease-out), border-color 120ms var(--ease-out); }
+.quick-amounts button:hover:not(:disabled) { background: var(--surface); border-color: var(--primary); }
+.quick-amounts button.selected { color: var(--primary-strong); background: var(--primary-soft); border-color: var(--primary); }
+.quick-amounts button:disabled { color: var(--muted); background: var(--surface); cursor: not-allowed; opacity: .6; }
+
+/* ข้อมูลบัญชีต้นทาง/ปลายทางที่ระบบ init มาจากลูกค้าแถวที่กด — อ่านได้อย่างเดียว */
+.c2c-locked-source { margin-bottom: 18px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+.c2c-locked-source > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.c2c-locked-source span { color: var(--muted); font-size: 10px; font-weight: 600; }
+.c2c-locked-source strong { overflow-wrap: anywhere; font-size: 12px; }
+.c2c-locked-source small { color: var(--muted); font-size: 9px; }
+@media (max-width: 640px) { .c2c-locked-source { grid-template-columns: 1fr; } }
 .deposit-field-grid { display: grid; grid-template-columns: minmax(180px, .8fr) minmax(260px, 1.2fr); gap: 12px; }
 .deposit-field-grid > label { min-width: 0; }
 .deposit-field-grid label { margin-bottom: 18px; display: block; }
@@ -505,7 +519,8 @@ tbody tr:hover { background: oklch(0.985 0.002 0); }
 .c2c-summary span { color: var(--muted); font-size: 10px; }
 .c2c-summary strong { margin-top: 7px; overflow-wrap: anywhere; font-size: 19px; letter-spacing: -.015em; font-variant-numeric: tabular-nums; }
 .c2c-summary small { margin-top: 4px; color: var(--muted); font-size: 10px; }
-.c2c-workspace { min-height: 650px; display: grid; grid-template-columns: minmax(330px, .78fr) minmax(520px, 1.22fr); gap: 16px; align-items: stretch; }
+/* รายการล่าสุดกินเต็มความกว้าง ส่วนรายละเอียดเปิดเป็น drawer เมื่อคลิกแถวเท่านั้น */
+.c2c-workspace { min-height: 520px; display: grid; grid-template-columns: 1fr; gap: 16px; align-items: stretch; }
 .c2c-list-panel, .c2c-detail-panel { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: white; overflow: hidden; }
 .c2c-list-panel { display: flex; flex-direction: column; }
 .c2c-list-panel > header { min-height: 72px; padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 14px; }
@@ -533,7 +548,11 @@ tbody tr:hover { background: oklch(0.985 0.002 0); }
 .c2c-status.success { color: var(--success); background: var(--success-bg); }
 .c2c-status.neutral { color: var(--muted); background: var(--surface-strong); }
 .c2c-status.large { padding: 6px 10px; font-size: 10px; }
-.c2c-detail-panel { min-height: 650px; padding-bottom: 18px; }
+.c2c-detail-panel { min-height: 0; padding-bottom: 18px; }
+.c2c-detail-drawer { position: fixed; inset: 0; z-index: var(--z-modal); padding: 24px; display: flex; justify-content: flex-end; background: oklch(0.08 0.01 0 / .45); animation: fade-in 140ms var(--ease-out); }
+.c2c-detail-drawer > .c2c-detail-panel { width: min(640px, 100%); max-height: 100%; overflow-y: auto; box-shadow: 0 24px 60px oklch(0.08 0.01 0 / .28); animation: drawer-in 200ms var(--ease-out); }
+.c2c-detail-header-end { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+@keyframes drawer-in { from { transform: translateX(24px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 .c2c-detail-header { min-height: 76px; padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .c2c-detail-header > div { min-width: 0; display: flex; align-items: center; gap: 10px; }
 .c2c-detail-header > div > div { min-width: 0; }
@@ -584,7 +603,6 @@ tbody tr:hover { background: oklch(0.985 0.002 0); }
   .balance-panel { min-height: 230px; }
   .metrics-panel { min-height: 220px; }
   .heading-actions .secondary-button { display: none; }
-  .c2c-workspace { grid-template-columns: minmax(300px, .75fr) minmax(430px, 1.25fr); }
 }
 
 @media (max-width: 860px) {
@@ -600,8 +618,6 @@ tbody tr:hover { background: oklch(0.985 0.002 0); }
   .page-wrap { padding: 26px 20px; }
   .c2c-page-heading { align-items: stretch; flex-direction: column; }
   .c2c-lookup { width: 100%; }
-  .c2c-workspace { grid-template-columns: 1fr; }
-  .c2c-list-panel { max-height: 430px; }
 }
 
 @media (max-width: 640px) {
@@ -699,8 +715,8 @@ tbody tr:hover { background: oklch(0.985 0.002 0); }
   .c2c-summary > div { min-width: 230px; scroll-snap-align: start; }
   .c2c-summary > div + div { border-left: 1px solid var(--line); }
   .c2c-workspace { min-height: 0; }
-  .c2c-list-panel { max-height: 380px; }
-  .c2c-detail-panel { min-height: 520px; }
+  .c2c-detail-drawer { padding: 0; }
+  .c2c-detail-drawer > .c2c-detail-panel { width: 100%; border-radius: 0; }
   .c2c-detail-facts { grid-template-columns: 1fr; }
   .c2c-parts-head { display: none; }
   .c2c-part-row { grid-template-columns: 1fr auto; }

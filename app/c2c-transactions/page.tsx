@@ -12,6 +12,7 @@ import {
   Search,
   ShieldAlert,
   UploadCloud,
+  X,
   XCircle,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -76,9 +77,6 @@ export default function C2CTransactionsPage() {
       if (!response.ok) throw new Error(result.error || "โหลดรายการ C2C ไม่สำเร็จ");
       if (listRequestRef.current !== requestId) return;
       setItems(result.transactions);
-      if (result.transactions[0]) {
-        setSelectedReference((current) => current || referenceOf(result.transactions[0]));
-      }
     } catch (error) {
       if (listRequestRef.current === requestId) {
         setLoadError(error instanceof Error ? error.message : "โหลดรายการ C2C ไม่สำเร็จ");
@@ -133,6 +131,24 @@ export default function C2CTransactionsPage() {
     }, 10_000);
     return () => window.clearTimeout(timer);
   }, [checkReference, detail]);
+
+  useEffect(() => {
+    if (!selectedReference) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") closeDetail();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedReference]);
+
+  function closeDetail() {
+    // เพิ่ม requestId เพื่อทิ้งผลของคำขอที่ยังค้างอยู่ ไม่ให้เด้ง drawer กลับมาเอง
+    detailRequestRef.current += 1;
+    setSelectedReference("");
+    setDetail(null);
+    setDetailError("");
+    setDetailLoading(false);
+  }
 
   function handleLookup(event: FormEvent) {
     event.preventDefault();
@@ -191,8 +207,8 @@ export default function C2CTransactionsPage() {
         {loadError && <div className="load-error" role="alert"><AlertTriangle size={20} /><span>{loadError}</span><button className="button secondary-button" onClick={() => void loadList()}>ลองใหม่</button></div>}
 
         <div className="c2c-workspace">
-          <section className="c2c-list-panel" aria-labelledby="c2c-list-title">
-            <header><div><h2 id="c2c-list-title">รายการล่าสุด</h2><p>เลือกแถวเพื่ออ่านสถานะจริงจาก Celox</p></div><button className="icon-button" onClick={() => void loadList()} aria-label="โหลดรายการใหม่" disabled={loading}><RefreshCcw className={loading ? "spin" : ""} size={18} /></button></header>
+          <section className="c2c-list-panel full" aria-labelledby="c2c-list-title">
+            <header><div><h2 id="c2c-list-title">รายการล่าสุด</h2><p>คลิกแถวเพื่ออ่านสถานะจริงจาก Celox</p></div><button className="icon-button" onClick={() => void loadList()} aria-label="โหลดรายการใหม่" disabled={loading}><RefreshCcw className={loading ? "spin" : ""} size={18} /></button></header>
             {loading && items.length === 0 ? (
               <div className="c2c-list-skeleton" aria-label="กำลังโหลด"><span /><span /><span /></div>
             ) : items.length === 0 ? (
@@ -208,14 +224,22 @@ export default function C2CTransactionsPage() {
             )}
           </section>
 
+        </div>
+
+        {selectedReference && (
+          <div
+            className="c2c-detail-drawer"
+            role="presentation"
+            onMouseDown={(event) => { if (event.target === event.currentTarget) closeDetail(); }}
+          >
           <section className="c2c-detail-panel" aria-labelledby="c2c-detail-title" aria-busy={detailLoading}>
             {!detail && !detailError ? (
-              <div className="c2c-empty"><Eye size={25} /><h3>เลือกรายการเพื่อดูรายละเอียด</h3><p>ระบบจะตรวจสถานะรายการนั้นกับ Celox โดยตรง และอัปเดตยอดภายในแบบครั้งเดียว</p></div>
+              <div className="c2c-empty"><LoaderCircle className="spin" size={25} /><h3>กำลังตรวจสถานะกับ Celox</h3><p>ระบบอ่านสถานะจริงของรายการนี้อยู่</p></div>
             ) : detailError ? (
               <div className="c2c-detail-error" role="alert"><AlertTriangle size={28} /><h3>ตรวจสถานะไม่สำเร็จ</h3><p>{detailError}</p>{selectedReference && <button className="button secondary-button" onClick={() => void checkReference(selectedReference)}><RefreshCcw size={16} />ลองตรวจอีกครั้ง</button>}</div>
             ) : detail && (
               <>
-                <header className="c2c-detail-header"><div><span className={`c2c-direction ${detail.direction}`}>{detail.direction === "deposit" ? <ArrowDownLeft size={18} /> : <ArrowUpRight size={18} />}</span><div><h2 id="c2c-detail-title">{detail.orderId}</h2><p>{detail.referenceId || "ไม่มี Reference ID"}</p></div></div><span className={`c2c-status large ${c2cStatusTone(detail.transactionStatus)}`}>{detailLoading && <LoaderCircle className="spin" size={14} />}{c2cStatusLabel(detail.transactionStatus)}</span></header>
+                <header className="c2c-detail-header"><div><span className={`c2c-direction ${detail.direction}`}>{detail.direction === "deposit" ? <ArrowDownLeft size={18} /> : <ArrowUpRight size={18} />}</span><div><h2 id="c2c-detail-title">{detail.orderId}</h2><p>{detail.referenceId || "ไม่มี Reference ID"}</p></div></div><div className="c2c-detail-header-end"><span className={`c2c-status large ${c2cStatusTone(detail.transactionStatus)}`}>{detailLoading && <LoaderCircle className="spin" size={14} />}{c2cStatusLabel(detail.transactionStatus)}</span><button className="icon-button" type="button" onClick={closeDetail} aria-label="ปิดรายละเอียด"><X size={19} /></button></div></header>
                 <div className="c2c-detail-amount"><span>{detail.direction === "deposit" ? "ยอดฝาก" : "ยอดถอน"}</span><strong>{currency.format(detail.amount)}</strong><p>{c2cStatusDescription(detail.transactionStatus)}</p></div>
                 {canAttachSlip(detail) && <div className="c2c-manual-alert"><UploadCloud size={19} /><span><strong>{detail.transactionStatus === "EXPIRED" ? "สลิปรอบก่อนไม่ผ่าน แนบใหม่ได้" : "รายการนี้จับคู่แล้วและยังรอสลิป"}</strong> แนบไฟล์กับรายการเดิมได้เลย ไม่ต้องสร้างรายการฝากใหม่</span></div>}
                 {detail.awaitingManualReview && <div className="c2c-manual-alert"><ShieldAlert size={19} /><span><strong>รายการนี้รอเจ้าหน้าที่โดยไม่มีเวลาปลดอัตโนมัติ</strong> ยอดที่ค้างยังถูกกันไว้ {currency.format(detail.heldAmount)}</span></div>}
@@ -225,7 +249,8 @@ export default function C2CTransactionsPage() {
               </>
             )}
           </section>
-        </div>
+          </div>
+        )}
 
         {slipTarget && (
           <C2CSlipUploadDialog

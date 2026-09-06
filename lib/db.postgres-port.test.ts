@@ -20,6 +20,30 @@ async function seedCustomer(id: string, name: string, balance: number, withdrawa
 }
 
 describe("lib/db.ts on Postgres", () => {
+  it("listCustomers: ส่งบัญชีธนาคารของลูกค้าออกไปให้หน้าฝาก/ถอน C2C ใช้ init ฟอร์ม", async () => {
+    await seedCustomer("C-BANK", "มีบัญชี", 0, 0);
+    await seedCustomer("C-NONE", "ไม่มีบัญชี", 0, 0);
+    await db.run("UPDATE customers SET bank_code = ?, bank_account_no = ? WHERE id = ?",
+      ["014", "1234567890", "C-BANK"]);
+
+    const { allCustomers } = await mod.listCustomers();
+    const withBank = allCustomers.find((customer) => customer.id === "C-BANK");
+    const withoutBank = allCustomers.find((customer) => customer.id === "C-NONE");
+    expect(withBank).toMatchObject({ bankCode: "014", bankAccountNo: "1234567890" });
+    // ลูกค้าที่ยังไม่ผูกบัญชีได้ค่าว่าง หน้าเว็บใช้ค่านี้บล็อกไม่ให้เปิดรายการ C2C
+    expect(withoutBank).toMatchObject({ bankCode: "", bankAccountNo: "" });
+  });
+
+  it("listTransactions: แนบบัญชีธนาคารมากับลูกค้าของแต่ละธุรกรรมด้วย", async () => {
+    await seedCustomer("C-TX", "เจ้าของรายการ", 0, 0);
+    await db.run("UPDATE customers SET bank_code = ?, bank_account_no = ? WHERE id = ?",
+      ["004", "2345678901", "C-TX"]);
+    await mod.createTransaction({ customerId: "C-TX", kind: "deposit_account", amount: 100 });
+
+    const { transactions } = await mod.listTransactions();
+    expect(transactions[0].customer).toMatchObject({ bankCode: "004", bankAccountNo: "2345678901" });
+  });
+
   it("createTransaction: account deposit then withdraw, with guard", async () => {
     await seedCustomer("C-1", "ก", 0, 0);
     const dep = await mod.createTransaction({ customerId: "C-1", kind: "deposit_account", amount: 100 });

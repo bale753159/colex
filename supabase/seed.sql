@@ -3,13 +3,13 @@
 --
 -- หมายเหตุ: ต้นฉบับ seedDatabase() มีลูกค้าตัวอย่าง 5 คน (ไม่ใช่ 7) — คัดลอกมาตามจริง
 
-INSERT INTO customers (id, name, account, initials, color, phone, email, balance_satang, withdrawable_satang, created_at)
+INSERT INTO customers (id, name, account, initials, color, phone, email, bank_code, bank_account_no, balance_satang, withdrawable_satang, created_at)
 VALUES
-  ('C-1024', 'วรพงษ์ มณีสอน', 'ACC-90241', 'ว', 'violet', '081-234-5678', 'nattawut@example.com', 0, 0, '2026-07-12T09:15:00+07:00'),
-  ('C-1081', 'พิมพ์ชนก วงศ์คำ', 'ACC-79126', 'พ', 'cyan', '089-118-2046', 'pimchanok@example.com', 465000, 430000, '2026-07-18T11:30:00+07:00'),
-  ('C-1093', 'บริษัท สยามเน็กซ์ จำกัด', 'ACC-68403', 'ส', 'amber', '02-118-2900', 'finance@siamnext.co.th', 1250000, 1150000, '2026-07-22T14:10:00+07:00'),
-  ('C-1137', 'ธนกฤต มั่นคง', 'ACC-55718', 'ธ', 'blue', '086-425-7710', 'thanakrit@example.com', 310000, 310000, '2026-08-02T10:00:00+07:00'),
-  ('C-1162', 'จิราพร แสงทอง', 'ACC-43092', 'จ', 'rose', '095-662-9184', 'jiraporn@example.com', 580000, 520000, '2026-08-08T15:45:00+07:00')
+  ('C-1024', 'วรพงษ์ มณีสอน', 'ACC-90241', 'ว', 'violet', '081-234-5678', 'nattawut@example.com', '014', '1234567890', 0, 0, '2026-07-12T09:15:00+07:00'),
+  ('C-1081', 'พิมพ์ชนก วงศ์คำ', 'ACC-79126', 'พ', 'cyan', '089-118-2046', 'pimchanok@example.com', '004', '2345678901', 465000, 430000, '2026-07-18T11:30:00+07:00'),
+  ('C-1093', 'บริษัท สยามเน็กซ์ จำกัด', 'ACC-68403', 'ส', 'amber', '02-118-2900', 'finance@siamnext.co.th', '002', '3456789012', 1250000, 1150000, '2026-07-22T14:10:00+07:00'),
+  ('C-1137', 'ธนกฤต มั่นคง', 'ACC-55718', 'ธ', 'blue', '086-425-7710', 'thanakrit@example.com', '006', '4567890123', 310000, 310000, '2026-08-02T10:00:00+07:00'),
+  ('C-1162', 'จิราพร แสงทอง', 'ACC-43092', 'จ', 'rose', '095-662-9184', 'jiraporn@example.com', '025', '5678901234', 580000, 520000, '2026-08-08T15:45:00+07:00')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO transactions (id, customer_id, direction, channel, amount_satang, note, status, created_at)

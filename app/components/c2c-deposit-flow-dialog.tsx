@@ -7,7 +7,6 @@ import {
   Building2,
   Check,
   CheckCircle2,
-  ChevronDown,
   Clock3,
   Copy,
   FileImage,
@@ -27,7 +26,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { BANK_NAME_MAP, BANK_OPTIONS } from "@/lib/celox/banks";
+import { BANK_NAME_MAP } from "@/lib/celox/banks";
 import { c2cStatusDescription, c2cStatusLabel, c2cStatusTone } from "@/lib/celox/c2c-display";
 import type {
   C2CDepositSlipResponse,
@@ -55,20 +54,20 @@ type Phase =
 
 type Props = {
   customer: Customer;
-  customers: Customer[];
-  onCustomerChange: (customerId: string) => void;
   onClose: () => void;
   onChanged: () => void;
 };
 
 type FormState = {
   amount: string;
-  sourceBankCode: string;
-  sourceAccountName: string;
-  sourceAccountNo: string;
-  matchTtlSeconds: C2CMatchTtlSeconds;
-  referenceId: string;
 };
+
+// ข้อมูลบัญชีต้นทาง ชื่อบัญชี และ Reference ID ถูกกำหนดจากลูกค้าแถวที่กดมา เจ้าหน้าที่
+// แก้ไม่ได้ จึงไม่ต้องเป็น state ของฟอร์ม — ดู supabase/migrations/0002 สำหรับที่มาของบัญชี
+const QUICK_AMOUNTS = [50, 100, 150, 200, 300, 400, 500, 1000] as const;
+
+// ฝั่งฝากใช้เวลารอจับคู่ค่าเดียวเสมอ เจ้าหน้าที่กรอกแค่ยอดเงิน
+const DEFAULT_MATCH_TTL_SECONDS: C2CMatchTtlSeconds = 600;
 
 const currency = new Intl.NumberFormat("th-TH", {
   style: "currency",
@@ -105,8 +104,6 @@ function fieldMessage(error: CeloxFieldError) {
 
 export default function C2CDepositFlowDialog({
   customer,
-  customers,
-  onCustomerChange,
   onClose,
   onChanged,
 }: Props) {
@@ -116,14 +113,8 @@ export default function C2CDepositFlowDialog({
   const previewUrlRef = useRef("");
   const onChangedRef = useRef(onChanged);
   const [phase, setPhase] = useState<Phase>("form");
-  const [form, setForm] = useState<FormState>({
-    amount: "",
-    sourceBankCode: "",
-    sourceAccountName: "",
-    sourceAccountNo: "",
-    matchTtlSeconds: 600,
-    referenceId: makeReference(),
-  });
+  const [form, setForm] = useState<FormState>({ amount: "" });
+  const [referenceId] = useState(makeReference);
   const [requestBody, setRequestBody] = useState<CreateC2CDepositRequest | null>(null);
   const [deposit, setDeposit] = useState<CreateC2CDepositResponse | null>(null);
   const [status, setStatus] = useState<C2CTransactionResponse | null>(null);
@@ -140,6 +131,10 @@ export default function C2CDepositFlowDialog({
   const [dragging, setDragging] = useState(false);
 
   const busy = phase === "creating" || phase === "uploading";
+  // บัญชีต้นทางมาจากลูกค้าแถวที่กด ถ้าลูกค้ายังไม่ผูกบัญชีก็เปิดรายการไม่ได้
+  const sourceAccountNo = customer.bankAccountNo.replace(/[\s-]/g, "");
+  const sourceBankName = BANK_NAME_MAP[customer.bankCode as keyof typeof BANK_NAME_MAP];
+  const bankReady = Boolean(sourceBankName) && /^\d{10,15}$/.test(sourceAccountNo);
   const activeTransferTo = status?.transferTo ?? deposit?.transferTo ?? null;
   const activeStatus = slipResult?.transactionStatus
     ?? status?.transactionStatus
@@ -243,21 +238,17 @@ export default function C2CDepositFlowDialog({
   function validateForm() {
     const next: Record<string, string> = {};
     const normalizedAmount = Number(form.amount.replaceAll(",", ""));
-    const accountNo = form.sourceAccountNo.replace(/[\s-]/g, "");
     if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) next.amount = "กรุณากรอกจำนวนเงินมากกว่า 0 บาท";
-    if (!form.sourceBankCode) next.sourceBankCode = "กรุณาเลือกธนาคารต้นทาง";
-    if (!form.sourceAccountName.trim()) next.sourceAccountName = "กรุณากรอกชื่อบัญชีต้นทาง";
-    if (!/^\d{10,15}$/.test(accountNo)) next.sourceAccountNo = "เลขบัญชีต้องมี 10–15 หลัก";
-    if (!form.referenceId.trim()) next.referenceId = "กรุณาระบุเลขอ้างอิงสำหรับติดตามรายการ";
     setFieldErrors(next);
     if (Object.keys(next).length > 0) return null;
+    if (!bankReady) return null;
     const input: CreateC2CDepositRequest = {
       amount: normalizedAmount,
-      sourceBankCode: form.sourceBankCode as CreateC2CDepositRequest["sourceBankCode"],
-      sourceAccountName: form.sourceAccountName.trim(),
-      sourceAccountNo: accountNo,
-      matchTtlSeconds: form.matchTtlSeconds,
-      referenceId: form.referenceId.trim(),
+      sourceBankCode: customer.bankCode as CreateC2CDepositRequest["sourceBankCode"],
+      sourceAccountName: customer.name,
+      sourceAccountNo: sourceAccountNo,
+      matchTtlSeconds: DEFAULT_MATCH_TTL_SECONDS,
+      referenceId,
     };
     return input;
   }
@@ -439,20 +430,28 @@ export default function C2CDepositFlowDialog({
 
         {phase === "form" && (
           <form className="transaction-form deposit-form" onSubmit={handleReview} noValidate>
-            <label htmlFor="c2c-deposit-customer"><span>ลูกค้าในระบบ</span><div className="select-wrap"><select id="c2c-deposit-customer" value={customer.id} onChange={(event) => onCustomerChange(event.target.value)}>{customers.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.account}</option>)}</select><ChevronDown size={17} /></div><small>ใช้ผูกสถานะ C2C และอัปเดตยอดเมื่อตรวจพบ SUCCESS</small></label>
-            <div className="deposit-field-grid">
-              <label htmlFor="c2c-deposit-amount"><span>ยอดที่ผู้ใช้จะโอน</span><div className={`money-input ${fieldErrors.amount ? "invalid" : ""}`}><span>฿</span><input id="c2c-deposit-amount" autoFocus inputMode="decimal" value={form.amount} onChange={(event) => updateField("amount", event.target.value.replace(/[^0-9.,]/g, ""))} placeholder="0.00" aria-invalid={Boolean(fieldErrors.amount)} /></div><small className={fieldErrors.amount ? "field-error" : ""}>{fieldErrors.amount || "Celox จะตรวจช่วงยอดต่ำสุดและสูงสุดอีกครั้ง"}</small></label>
-              <label htmlFor="c2c-deposit-bank"><span>ธนาคารต้นทาง</span><div className={`select-wrap ${fieldErrors.sourceBankCode ? "invalid" : ""}`}><select id="c2c-deposit-bank" value={form.sourceBankCode} onChange={(event) => updateField("sourceBankCode", event.target.value)} aria-invalid={Boolean(fieldErrors.sourceBankCode)}><option value="" disabled>เลือกธนาคารผู้โอน</option>{BANK_OPTIONS.map(([code, name]) => <option key={code} value={code}>{name} · {code}</option>)}</select><ChevronDown size={17} /></div><small className={fieldErrors.sourceBankCode ? "field-error" : ""}>{fieldErrors.sourceBankCode || "ต้องตรงกับธนาคารบนสลิป"}</small></label>
+            <div className="c2c-locked-source">
+              <div><span>ลูกค้า / ผู้ฝาก</span><strong>{customer.name}</strong><small>{customer.account}</small></div>
+              <div><span>ธนาคารต้นทาง</span><strong>{sourceBankName ?? "ยังไม่ได้ผูกธนาคาร"}</strong><small>{customer.bankCode ? `รหัส ${customer.bankCode}` : "ต้องผูกบัญชีก่อนจึงเปิดรายการได้"}</small></div>
+              <div><span>ชื่อบัญชีต้นทาง</span><strong>{customer.name}</strong><small>ใช้ชื่อลูกค้ารายนี้เสมอ</small></div>
+              <div><span>เลขบัญชีต้นทาง</span><strong>{customer.bankAccountNo || "—"}</strong><small>{bankReady ? "ต้องตรงกับบัญชีบนสลิป" : "เลขบัญชีต้องมี 10–15 หลัก"}</small></div>
+              <div><span>Reference ID</span><strong>{referenceId}</strong><small>ระบบออกให้อัตโนมัติ แก้ไขไม่ได้</small></div>
             </div>
-            <label htmlFor="c2c-deposit-name"><span>ชื่อบัญชีต้นทาง</span><input id="c2c-deposit-name" value={form.sourceAccountName} onChange={(event) => updateField("sourceAccountName", event.target.value)} placeholder="ชื่อเจ้าของบัญชีผู้โอน" aria-invalid={Boolean(fieldErrors.sourceAccountName)} /><small className={fieldErrors.sourceAccountName ? "field-error" : ""}>{fieldErrors.sourceAccountName || "หากชื่อบนสลิปไม่ตรง รายการอาจถูกพักให้เจ้าหน้าที่ตรวจ"}</small></label>
-            <label htmlFor="c2c-deposit-account"><span>เลขบัญชีต้นทาง</span><input id="c2c-deposit-account" inputMode="numeric" value={form.sourceAccountNo} onChange={(event) => updateField("sourceAccountNo", event.target.value.replace(/[^0-9\s-]/g, ""))} placeholder="987-6-54321-0" aria-invalid={Boolean(fieldErrors.sourceAccountNo)} /><small className={fieldErrors.sourceAccountNo ? "field-error" : ""}>{fieldErrors.sourceAccountNo || "เลขบัญชี 10–15 หลัก"}</small></label>
-            <div className="deposit-field-grid">
-              <label htmlFor="c2c-deposit-ttl"><span>เวลารอจับคู่</span><div className="select-wrap"><select id="c2c-deposit-ttl" value={form.matchTtlSeconds} onChange={(event) => updateField("matchTtlSeconds", Number(event.target.value) as C2CMatchTtlSeconds)}><option value={60}>1 นาที</option><option value={120}>2 นาที</option><option value={300}>5 นาที</option><option value={600}>10 นาที</option><option value={900}>15 นาที</option><option value={1200}>20 นาที</option></select><ChevronDown size={17} /></div><small>เมื่อหมดเวลาต้องสร้างรายการใหม่</small></label>
-              <label htmlFor="c2c-deposit-reference"><span>Reference ID</span><input id="c2c-deposit-reference" value={form.referenceId} onChange={(event) => updateField("referenceId", event.target.value)} aria-invalid={Boolean(fieldErrors.referenceId)} /><small className={fieldErrors.referenceId ? "field-error" : ""}>{fieldErrors.referenceId || "ห้ามซ้ำ ใช้ตรวจสถานะแทน orderId ได้"}</small></label>
+            <label htmlFor="c2c-deposit-amount"><span>ยอดที่ผู้ใช้จะโอน</span><div className={`money-input ${fieldErrors.amount ? "invalid" : ""}`}><span>฿</span><input id="c2c-deposit-amount" autoFocus inputMode="decimal" value={form.amount} onChange={(event) => updateField("amount", event.target.value.replace(/[^0-9.,]/g, ""))} placeholder="0.00" aria-invalid={Boolean(fieldErrors.amount)} /></div><small className={fieldErrors.amount ? "field-error" : ""}>{fieldErrors.amount || "Celox จะตรวจช่วงยอดต่ำสุดและสูงสุดอีกครั้ง"}</small></label>
+            <div className="quick-amounts" role="group" aria-label="เลือกยอดที่ใช้บ่อย">
+              {QUICK_AMOUNTS.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={Number(form.amount.replaceAll(",", "")) === value ? "selected" : ""}
+                  onClick={() => updateField("amount", String(value))}
+                >{value.toLocaleString("th-TH")}</button>
+              ))}
             </div>
+            {!bankReady && <div className="form-error" role="alert">ลูกค้ารายนี้ยังไม่มีบัญชีธนาคารที่ใช้ได้ในระบบ จึงเปิดรายการฝาก C2C ไม่ได้</div>}
             <div className="inline-notice"><ShieldCheck size={18} /><span><strong>หนึ่งคำขอคือหนึ่งรายการ</strong> ระบบจะไม่ส่ง splitMode หรือแบ่งยอด และจะไม่สร้างซ้ำเมื่อกำลังรอคู่</span></div>
             {globalError && <div className="form-error" role="alert">{globalError}</div>}
-            <div className="dialog-actions deposit-actions"><button type="button" className="button secondary-button" onClick={requestClose}>ยกเลิก</button><button type="submit" className="button deposit-button">ตรวจสอบข้อมูล</button></div>
+            <div className="dialog-actions deposit-actions"><button type="button" className="button secondary-button" onClick={requestClose}>ยกเลิก</button><button type="submit" className="button deposit-button" disabled={!bankReady}>ตรวจสอบข้อมูล</button></div>
           </form>
         )}
 

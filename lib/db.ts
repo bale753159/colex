@@ -39,6 +39,8 @@ type CustomerRow = {
   color: string;
   phone: string;
   email: string;
+  bank_code: string;
+  bank_account_no: string;
   balance_satang: number;
   withdrawable_satang: number;
   created_at: string;
@@ -53,6 +55,8 @@ type TransactionRow = {
   customer_color: string;
   customer_phone: string;
   customer_email: string;
+  customer_bank_code: string;
+  customer_bank_account_no: string;
   customer_balance_satang: number;
   customer_withdrawable_satang: number;
   customer_created_at: string;
@@ -200,6 +204,8 @@ function mapCustomer(row: CustomerRow): Customer {
     color: row.color,
     phone: row.phone,
     email: row.email,
+    bankCode: row.bank_code,
+    bankAccountNo: row.bank_account_no,
     balance: toMoney(row.balance_satang),
     withdrawableBalance: toMoney(row.withdrawable_satang),
     createdAt: row.created_at,
@@ -248,6 +254,8 @@ function mapTransaction(row: TransactionRow): Transaction {
       color: row.customer_color,
       phone: row.customer_phone,
       email: row.customer_email,
+      bank_code: row.customer_bank_code,
+      bank_account_no: row.customer_bank_account_no,
       balance_satang: row.customer_balance_satang,
       withdrawable_satang: row.customer_withdrawable_satang,
       created_at: row.customer_created_at,
@@ -384,6 +392,7 @@ const transactionSelect = `
   SELECT t.*,
     c.name AS customer_name, c.account AS customer_account, c.initials AS customer_initials,
     c.color AS customer_color, c.phone AS customer_phone, c.email AS customer_email,
+    c.bank_code AS customer_bank_code, c.bank_account_no AS customer_bank_account_no,
     c.balance_satang AS customer_balance_satang, c.withdrawable_satang AS customer_withdrawable_satang,
     c.created_at AS customer_created_at,
     cp.id AS counterparty_id, cp.name AS counterparty_name, cp.account AS counterparty_account

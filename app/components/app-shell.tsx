@@ -4,22 +4,18 @@ import {
   ArrowLeftRight,
   Bell,
   ChevronDown,
-  CircleHelp,
   LayoutDashboard,
   Menu,
   ReceiptText,
   Search,
-  Settings,
-  ShieldCheck,
   Users,
-  WalletCards,
   X,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 type AppShellProps = {
-  active: "overview" | "transactions" | "c2c" | "customers" | "accounts";
+  active: "overview" | "transactions" | "c2c" | "customers";
   searchValue: string;
   onSearchChange: (value: string) => void;
   searchPlaceholder?: string;
@@ -31,7 +27,6 @@ const navItems = [
   { id: "transactions", label: "ธุรกรรม", href: "/#transactions", icon: ReceiptText },
   { id: "c2c", label: "รายการ C2C", href: "/c2c-transactions", icon: ArrowLeftRight },
   { id: "customers", label: "ลูกค้า", href: "/customers", icon: Users },
-  { id: "accounts", label: "บัญชีและกระเป๋า", href: "/#accounts", icon: WalletCards },
 ] as const;
 
 export default function AppShell({ active, searchValue, onSearchChange, searchPlaceholder = "ค้นหาลูกค้า เลขที่บัญชี หรือธุรกรรม", children }: AppShellProps) {
@@ -64,13 +59,6 @@ export default function AppShell({ active, searchValue, onSearchChange, searchPl
             const Icon = item.icon;
             return <Link key={item.id} className={active === item.id ? "active" : ""} href={item.href} onClick={() => setMobileNav(false)}><Icon size={19} />{item.label}</Link>;
           })}
-        </nav>
-
-        <div className="nav-section-label">ระบบ</div>
-        <nav className="primary-nav secondary" aria-label="เมนูระบบ">
-          <a href="#security"><ShieldCheck size={19} />ความปลอดภัย</a>
-          <a href="#settings"><Settings size={19} />ตั้งค่า</a>
-          <a href="#help"><CircleHelp size={19} />ศูนย์ช่วยเหลือ</a>
         </nav>
 
         <div className="sidebar-status">

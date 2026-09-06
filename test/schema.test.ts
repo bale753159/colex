@@ -31,6 +31,30 @@ describe("schema", () => {
     expect(tableNames.length).toBe(EXPECTED_TABLE_COUNT);
   });
 
+  it("customers มีคอลัมน์บัญชีธนาคารที่ไม่เป็น null และ default เป็นค่าว่าง", async () => {
+    const rows = await db.query<{ column_name: string; data_type: string; is_nullable: string; column_default: string | null }>(`
+      SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns
+      WHERE table_name = 'customers' AND column_name IN ('bank_code', 'bank_account_no')
+      ORDER BY column_name`);
+    expect(rows.map((row) => row.column_name)).toEqual(["bank_account_no", "bank_code"]);
+    for (const row of rows) {
+      expect(row.data_type).toBe("text");
+      expect(row.is_nullable).toBe("NO");
+      expect(row.column_default).toContain("''");
+    }
+  });
+
+  it("ลูกค้าที่ยังไม่ผูกบัญชีได้ค่าว่าง ไม่ใช่ null", async () => {
+    await truncateAll();
+    await db.run(`
+      INSERT INTO customers (id, name, account, initials, color, balance_satang, withdrawable_satang, created_at)
+      VALUES ('C-NB', 'ยังไม่ผูกบัญชี', 'ACC-NB', 'ย', 'blue', 0, 0, '2026-09-01T00:00:00+07:00')`);
+    const row = await db.first<{ bank_code: string; bank_account_no: string }>(
+      "SELECT bank_code, bank_account_no FROM customers WHERE id = ?", ["C-NB"]);
+    expect(row).toEqual({ bank_code: "", bank_account_no: "" });
+    await truncateAll();
+  });
+
   it("จำนวนเงินเป็น bigint ไม่ใช่ integer", async () => {
     const row = await db.first<{ data_type: string }>(`
       SELECT data_type FROM information_schema.columns

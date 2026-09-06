@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { db, resetPoolForTests } from "@/lib/sql";
 
@@ -9,8 +9,8 @@ import { db, resetPoolForTests } from "@/lib/sql";
 // harness" คือจุดที่เลือก driver แทน
 process.env.KLANG_TEST_PG = "pglite";
 
-const MIGRATION = fileURLToPath(
-  new URL("../supabase/migrations/0001_init.sql", import.meta.url),
+const MIGRATIONS_DIR = fileURLToPath(
+  new URL("../supabase/migrations/", import.meta.url),
 );
 
 const TABLES = [
@@ -27,8 +27,14 @@ const TABLES = [
 ];
 
 export async function setupTestDatabase(): Promise<void> {
-  const sql = await readFile(MIGRATION, "utf8");
-  await db.script(sql);
+  // รันทุกไฟล์ใน supabase/migrations เรียงตามชื่อ เพื่อให้ schema ของเทสต์ตรงกับ
+  // ลำดับที่ README สั่งให้รันใน SQL Editor ของ Supabase
+  const files = (await readdir(MIGRATIONS_DIR))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+  for (const name of files) {
+    await db.script(await readFile(`${MIGRATIONS_DIR}${name}`, "utf8"));
+  }
 }
 
 export async function truncateAll(): Promise<void> {

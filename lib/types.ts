@@ -15,6 +15,8 @@ export type Customer = {
   color: string;
   phone: string;
   email: string;
+  bankCode: string;
+  bankAccountNo: string;
   balance: number;
   withdrawableBalance: number;
   createdAt: string;

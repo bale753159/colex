@@ -4,24 +4,15 @@ import {
   AlertTriangle,
   ArrowDownLeft,
   ArrowUpRight,
-  Bell,
   Check,
-  ChevronDown,
-  CircleHelp,
   Clock3,
   Download,
-  LayoutDashboard,
-  Menu,
   MoreHorizontal,
-  ReceiptText,
   Search,
-  Settings,
-  ShieldCheck,
   Users,
-  WalletCards,
-  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import AppShell from "@/app/components/app-shell";
 import DepositFlowDialog from "@/app/components/deposit-flow-dialog";
 import WithdrawalFlowDialog from "@/app/components/withdrawal-flow-dialog";
 import type { Customer, FinanceSummary, Transaction, TransactionsResponse } from "@/lib/types";
@@ -68,7 +59,6 @@ export default function FinanceDashboard() {
   const [search, setSearch] = useState("");
   const [dialog, setDialog] = useState<TransactionType | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState("");
-  const [mobileNav, setMobileNav] = useState(false);
   const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState("");
 
@@ -132,58 +122,7 @@ export default function FinanceDashboard() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className={`sidebar ${mobileNav ? "open" : ""}`}>
-        <div className="brand">
-          <span className="brand-mark">K</span>
-          <span><strong>KLANG</strong><small>FINANCE OPS</small></span>
-          <button className="icon-button sidebar-close" onClick={() => setMobileNav(false)} aria-label="ปิดเมนู"><X size={20} /></button>
-        </div>
-
-        <nav className="primary-nav" aria-label="เมนูหลัก">
-          <a className="active" href="#overview"><LayoutDashboard size={19} />ภาพรวม</a>
-          <a href="#transactions"><ReceiptText size={19} />ธุรกรรม</a>
-          <a href="/customers"><Users size={19} />ลูกค้า</a>
-          <a href="#accounts"><WalletCards size={19} />บัญชีและกระเป๋า</a>
-        </nav>
-
-        <div className="nav-section-label">ระบบ</div>
-        <nav className="primary-nav secondary" aria-label="เมนูระบบ">
-          <a href="#security"><ShieldCheck size={19} />ความปลอดภัย</a>
-          <a href="#settings"><Settings size={19} />ตั้งค่า</a>
-          <a href="#help"><CircleHelp size={19} />ศูนย์ช่วยเหลือ</a>
-        </nav>
-
-        <div className="sidebar-status">
-          <span className="status-dot" />
-          <span><strong>Supabase พร้อมใช้งาน</strong><small>บันทึกข้อมูลบน Supabase</small></span>
-        </div>
-      </aside>
-
-      {mobileNav && <button className="nav-backdrop" aria-label="ปิดเมนู" onClick={() => setMobileNav(false)} />}
-
-      <main className="main-content">
-        <header className="topbar">
-          <div className="mobile-brand-wrap">
-            <button className="icon-button menu-button" onClick={() => setMobileNav(true)} aria-label="เปิดเมนู"><Menu size={21} /></button>
-            <span className="brand-mark small">K</span>
-          </div>
-          <label className="global-search">
-            <Search size={18} />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ค้นหาลูกค้า เลขที่บัญชี หรือธุรกรรม" aria-label="ค้นหา" />
-            <kbd>⌘ K</kbd>
-          </label>
-          <div className="topbar-actions">
-            <button className="icon-button notification-button" aria-label="การแจ้งเตือน"><Bell size={19} /><span /></button>
-            <div className="user-divider" />
-            <button className="profile-button" aria-label="เมนูผู้ใช้">
-              <span className="avatar admin">ก</span>
-              <span className="profile-copy"><strong>กนกวรรณ</strong><small>Finance Admin</small></span>
-              <ChevronDown size={16} />
-            </button>
-          </div>
-        </header>
-
+    <AppShell active="overview" searchValue={search} onSearchChange={setSearch}>
         <div className="page-wrap" id="overview">
           <section className="page-heading">
             <div>
@@ -274,7 +213,6 @@ export default function FinanceDashboard() {
             <div className="table-footer"><span>แสดง {visibleTransactions.length} จาก {transactions.length} รายการ</span><button>ดูธุรกรรมทั้งหมด <ArrowUpRight size={15} /></button></div>
           </section>
         </div>
-      </main>
 
       {dialog === "deposit" && activeCustomer && (
         <DepositFlowDialog
@@ -296,6 +234,6 @@ export default function FinanceDashboard() {
           onCompleted={() => void loadData()}
         />
       )}
-    </div>
+    </AppShell>
   );
 }
