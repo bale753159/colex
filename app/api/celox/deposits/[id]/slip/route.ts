@@ -245,7 +245,9 @@ export async function POST(
       method: "POST",
       body: upstreamForm,
       cache: "no-store",
-      redirect: "error",
+      // workerd ไม่รับ redirect: "error" (โยน TypeError ก่อนเปิด socket) จึงใช้ "manual"
+      // แล้วปฏิเสธ 3xx เองด้านล่าง เพื่อไม่ส่งสลิปต่อไปยังปลายทางอื่นที่ Celox ชี้ไป
+      redirect: "manual",
       signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
     });
   } catch (cause) {
@@ -256,6 +258,14 @@ export async function POST(
         ? "Celox ไม่ตอบกลับภายในเวลาที่กำหนด จึงยังยืนยันผลการส่งสลิปไม่ได้"
         : "เชื่อมต่อ Celox ไม่สำเร็จ จึงยังยืนยันผลการส่งสลิปไม่ได้",
       code: timedOut ? "request_timeout" : "network_error",
+      retryable: false,
+    });
+  }
+
+  if (response.status >= 300 && response.status < 400) {
+    return errorResponse(502, {
+      error: "Celox ตอบกลับด้วย redirect ระหว่างส่งสลิป ซึ่งระบบไม่เดินตาม จึงยังยืนยันผลไม่ได้",
+      code: "invalid_response",
       retryable: false,
     });
   }

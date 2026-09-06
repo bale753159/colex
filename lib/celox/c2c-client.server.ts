@@ -92,6 +92,20 @@ function getConfig(): C2CConfig {
   };
 }
 
+/**
+ * workerd ไม่รับ `redirect: "error"` — มันโยน TypeError ตั้งแต่ก่อนเปิด socket
+ * ("won't be implemented since it does not make sense at the edge") ทำให้ทุกคำขอที่ยิงหา Celox
+ * จาก Cloudflare Worker ตกลง catch ของ fetch แล้วถูกรายงานเป็น network_error / 502 ทั้งที่
+ * ยังไม่มีอะไรถูกส่งออกไป จึงต้องใช้ `redirect: "manual"` ซึ่งรองรับทั้งบน Node และ workerd
+ * แล้วปฏิเสธ 3xx เองให้ได้ผลเท่าเดิม: คำขอที่ลงลายเซ็นไว้ต้องไม่ถูกส่งต่อไปยังปลายทางอื่น
+ * และ body ของ redirect ต้องไม่ถูกอ่านเป็นคำตอบที่ใช้ได้
+ */
+const NO_FOLLOW_REDIRECT = "manual" as const;
+
+function isRedirect(response: Response): boolean {
+  return response.status >= 300 && response.status < 400;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -531,7 +545,7 @@ async function callSignedJson<T>(options: {
         },
         ...(options.rawBody ? { body: options.rawBody } : {}),
         cache: "no-store",
-        redirect: "error",
+        redirect: NO_FOLLOW_REDIRECT,
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (cause) {
@@ -553,6 +567,14 @@ async function callSignedJson<T>(options: {
         httpStatus: timedOut ? 504 : 502,
         retryable: options.operation === "check",
         cause,
+      });
+    }
+
+    if (isRedirect(response)) {
+      throw new CeloxError({
+        code: "invalid_response",
+        message: `Celox ตอบกลับด้วย redirect ระหว่าง${operationLabel(options.operation)} ซึ่งระบบไม่เดินตาม กรุณาอย่าส่งซ้ำ`,
+        httpStatus: 502,
       });
     }
 
@@ -707,7 +729,7 @@ export async function attachC2CDepositSlip(
           : signedHeaders(config, "POST", url.pathname, EMPTY_BODY_HASH),
         body: form,
         cache: "no-store",
-        redirect: "error",
+        redirect: NO_FOLLOW_REDIRECT,
         signal: AbortSignal.timeout(SLIP_UPLOAD_TIMEOUT_MS),
       });
     } catch (cause) {
@@ -720,6 +742,14 @@ export async function attachC2CDepositSlip(
           : "การเชื่อมต่อขาดระหว่างแนบสลิป ผลอาจถูกบันทึกแล้ว กรุณาตรวจสถานะก่อนแนบซ้ำ",
         httpStatus: timedOut ? 504 : 502,
         cause,
+      });
+    }
+
+    if (isRedirect(response)) {
+      throw new CeloxError({
+        code: "invalid_response",
+        message: "Celox ตอบกลับด้วย redirect ระหว่างแนบสลิป ซึ่งระบบไม่เดินตาม กรุณาตรวจสถานะก่อนแนบซ้ำ",
+        httpStatus: 502,
       });
     }
 
