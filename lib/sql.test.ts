@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createPgPool, db, resetPoolForTests, runPgTransaction, toPositional, tx } from "./sql";
+import { createPgPool, createRequestScopedPgDriver, db, resetPoolForTests, runPgTransaction, toPositional, tx } from "./sql";
 
 describe("toPositional", () => {
   it("แปลง ? เรียงเป็น $1 $2 ตามลำดับ", () => {
@@ -51,6 +51,83 @@ describe("createPgPool", () => {
     } finally {
       void pool.end().catch(() => {});
     }
+  });
+});
+
+describe("createRequestScopedPgDriver", () => {
+  // บน Cloudflare Workers ห้ามใช้ I/O object ที่สร้างในบริบทของ request หนึ่งจากอีก request
+  // pg.Pool ที่แคช socket ไว้ข้าม request จึงทำให้ request ที่สอง hang ตลอดกาลจน runtime
+  // ยกเลิกทิ้ง (error 1101) driver ตัวนี้จึงต้องเปิด connection ใหม่ทุกครั้งและปิดทุกครั้ง
+  function fakeClient() {
+    const calls: string[] = [];
+    return {
+      calls,
+      ended: 0,
+      query: async (sql: string) => { calls.push(sql); return { rows: [], rowCount: 0 }; },
+      end: async function (this: { ended: number }) { this.ended += 1; },
+    };
+  }
+
+  it("เปิด client ใหม่ทุกครั้งที่ exec ไม่ reuse ของเดิมข้าม request", async () => {
+    const made: ReturnType<typeof fakeClient>[] = [];
+    const driver = createRequestScopedPgDriver(async () => {
+      const c = fakeClient();
+      made.push(c);
+      return c as never;
+    });
+
+    await driver.exec("SELECT 1", []);
+    await driver.exec("SELECT 2", []);
+
+    expect(made).toHaveLength(2);
+    expect(made[0]).not.toBe(made[1]);
+  });
+
+  it("ปิด client ทุกครั้งหลังใช้เสร็จ ไม่ทิ้ง connection ค้างไว้ให้ Supabase", async () => {
+    const made: ReturnType<typeof fakeClient>[] = [];
+    const driver = createRequestScopedPgDriver(async () => {
+      const c = fakeClient();
+      made.push(c);
+      return c as never;
+    });
+
+    await driver.exec("SELECT 1", []);
+
+    expect(made[0]!.ended).toBe(1);
+  });
+
+  it("ปิด client แม้ query จะโยน error", async () => {
+    const client = fakeClient();
+    client.query = async () => { throw new Error("query พัง"); };
+    const driver = createRequestScopedPgDriver(async () => client as never);
+
+    await expect(driver.exec("SELECT 1", [])).rejects.toThrow("query พัง");
+    expect(client.ended).toBe(1);
+  });
+
+  it("ใช้ client ตัวเดียวตลอด transaction แล้วค่อยปิด", async () => {
+    const made: ReturnType<typeof fakeClient>[] = [];
+    const driver = createRequestScopedPgDriver(async () => {
+      const c = fakeClient();
+      made.push(c);
+      return c as never;
+    });
+
+    await driver.transaction(async (exec) => {
+      await exec("INSERT INTO t VALUES (?)", [1]);
+      await exec("INSERT INTO t VALUES (?)", [2]);
+      return null as never;
+    });
+
+    expect(made).toHaveLength(1);
+    expect(made[0]!.calls).toEqual([
+      "BEGIN",
+      // toPositional นับ placeholder ใหม่ทุกคำสั่ง ทั้งสองบรรทัดจึงเป็น $1
+      "INSERT INTO t VALUES ($1)",
+      "INSERT INTO t VALUES ($1)",
+      "COMMIT",
+    ]);
+    expect(made[0]!.ended).toBe(1);
   });
 });
 

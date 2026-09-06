@@ -1,4 +1,4 @@
-import { Pool, types as pgTypes } from "pg";
+import { Client, Pool, types as pgTypes } from "pg";
 
 export type Row = Record<string, unknown>;
 
@@ -165,11 +165,43 @@ export async function runPgTransaction<T>(
   }
 }
 
-async function createPgDriver(): Promise<Driver> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("ไม่พบ DATABASE_URL กรุณาตั้งค่าการเชื่อมต่อ Supabase ใน .env.local");
+/**
+ * Cloudflare Workers ห้ามใช้ I/O object ที่ถูกสร้างในบริบทของ request หนึ่งจากอีก request หนึ่ง
+ * pg.Pool แคช TCP socket ไว้ที่ module scope เพื่อ reuse ข้าม request ซึ่งบน Node คือสิ่งที่ถูกต้อง
+ * แต่บน Workers ทำให้ request ที่หยิบ connection เก่ามาใช้ hang ค้างจน runtime ยกเลิกทิ้ง
+ * (error 1101 "code had hung and would never generate a response") อาการคือ 200/500 สลับกัน
+ * เพราะ request ที่เปิด connection ใหม่ผ่าน ส่วนที่ reuse ของเดิมพัง
+ *
+ * driver ตัวนี้จึงเปิด Client ใหม่ต่อหนึ่งการทำงานและปิดทันทีที่เสร็จ ไม่มี state ข้าม request
+ * ต้นทุนคือ handshake ต่อ request ซึ่งแก้ได้ด้วย Hyperdrive ที่ pool ให้ฝั่ง Cloudflare
+ */
+export function createRequestScopedPgDriver(connect: () => Promise<Client>): Driver {
+  async function withClient<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+    const client = await connect();
+    try {
+      return await fn(client);
+    } finally {
+      // ปิดให้ได้เสมอ ไม่งั้น connection ค้างที่ Supabase จนชน limit — และ error ตอนปิด
+      // ต้องไม่กลบ error จริงที่เกิดใน fn
+      await client.end().catch(() => {});
+    }
   }
+
+  return {
+    exec: async (sql, params) => withClient(async (client) => {
+      const result = await client.query(toPositional(sql), params);
+      return { rows: result.rows as Row[], rowCount: result.rowCount ?? 0 };
+    }),
+    script: async (sql) => {
+      await withClient((client) => client.query(sql));
+    },
+    transaction: (fn) => withClient((client) => runPgTransaction(client, fn)),
+    close: async () => {},
+  };
+}
+
+/** type parser เป็น global ของ pg ตั้งครั้งเดียวใช้ได้กับทั้ง Pool และ Client */
+function setPgTypeParsers(): void {
   pgTypes.setTypeParser(OID_INT8, toSafeInt as (value: string) => number);
   // NUMERIC เกิดขึ้นเมื่อ SUM()/AVG() ทำงานกับคอลัมน์ bigint (เช่นยอดรวมเงิน) — โค้ดเบสนี้
   // ไม่มีคอลัมน์ numeric ที่เป็นเศษส่วนจริง ทุกค่าเงินเป็นจำนวนเต็มสตางค์ ดังนั้นถ้าค่าที่ได้
@@ -177,6 +209,9 @@ async function createPgDriver(): Promise<Driver> {
   pgTypes.setTypeParser(OID_NUMERIC, toSafeInt as (value: string) => number);
   pgTypes.setTypeParser(OID_TIMESTAMPTZ, toIsoString as (value: string) => string);
   pgTypes.setTypeParser(OID_TIMESTAMP, toIsoString as (value: string) => string);
+}
+
+async function createPgDriver(connectionString: string): Promise<Driver> {
   const pool = createPgPool(connectionString);
 
   const exec: Exec = async (sql, params) => {
@@ -243,11 +278,38 @@ async function createPgliteDriver(): Promise<Driver> {
   };
 }
 
+/**
+ * Workers ตั้ง navigator.userAgent เป็นค่านี้เสมอ ใช้แยกว่ากำลังรันบน workerd หรือ Node
+ * (next dev, next start, vitest) ซึ่งพฤติกรรมเรื่อง connection ต่างกันคนละขั้ว
+ */
+function isCloudflareWorker(): boolean {
+  return typeof navigator !== "undefined" && navigator.userAgent === "Cloudflare-Workers";
+}
+
+async function createPostgresDriver(): Promise<Driver> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("ไม่พบ DATABASE_URL กรุณาตั้งค่าการเชื่อมต่อ Supabase ใน .env.local");
+  }
+  setPgTypeParsers();
+
+  if (isCloudflareWorker()) {
+    return createRequestScopedPgDriver(async () => {
+      const client = new Client({ connectionString });
+      await client.connect();
+      return client;
+    });
+  }
+
+  // บน Node การ pool คือสิ่งที่ถูกต้องและเร็วกว่ามาก จึงคงพฤติกรรมเดิมไว้ทั้งหมด
+  return createPgDriver(connectionString);
+}
+
 function getDriver(): Promise<Driver> {
   if (!driverPromise) {
     driverPromise = process.env.KLANG_TEST_PG === "pglite"
       ? createPgliteDriver()
-      : createPgDriver();
+      : createPostgresDriver();
   }
   return driverPromise;
 }
