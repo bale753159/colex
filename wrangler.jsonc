@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "itstore-finance",
+  "main": ".open-next/worker.js",
+  // ≥ 2025-04-01 ทำให้ nodejs_compat_populate_process_env เปิดอัตโนมัติ
+  // vars และ secrets ของ Worker จึงโผล่ใน process.env โดยไม่ต้องแก้โค้ด
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
