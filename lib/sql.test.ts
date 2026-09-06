@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createPgPool, createRequestScopedPgDriver, db, resetPoolForTests, runPgTransaction, toPositional, tx } from "./sql";
+import { createPgPool, createRequestScopedPgDriver, db, pickConnectionString, resetPoolForTests, runPgTransaction, toPositional, tx } from "./sql";
 
 describe("toPositional", () => {
   it("แปลง ? เรียงเป็น $1 $2 ตามลำดับ", () => {
@@ -51,6 +51,29 @@ describe("createPgPool", () => {
     } finally {
       void pool.end().catch(() => {});
     }
+  });
+});
+
+describe("pickConnectionString", () => {
+  // Hyperdrive pool connection ให้ที่ edge ของ Cloudflare ทำให้ไม่ต้อง handshake กับ Supabase
+  // ใหม่ทุก request แต่ต้องไม่บังคับว่าต้องมี ไม่งั้นรันบน Node หรือก่อนผูก binding จะพังทันที
+  it("ใช้ connection string ของ Hyperdrive เมื่อผูก binding ไว้แล้ว", () => {
+    expect(pickConnectionString("postgresql://hyperdrive/local", "postgresql://supabase/direct"))
+      .toBe("postgresql://hyperdrive/local");
+  });
+
+  it("ถอยไปใช้ DATABASE_URL เมื่อยังไม่ได้ผูก Hyperdrive", () => {
+    expect(pickConnectionString(undefined, "postgresql://supabase/direct"))
+      .toBe("postgresql://supabase/direct");
+  });
+
+  it("ไม่หลงใช้ค่าว่างของ binding ที่ผูกไว้แต่ยังไม่มีค่า", () => {
+    expect(pickConnectionString("", "postgresql://supabase/direct"))
+      .toBe("postgresql://supabase/direct");
+  });
+
+  it("โยน error ที่บอกวิธีแก้เมื่อไม่มีทั้งสองทาง", () => {
+    expect(() => pickConnectionString(undefined, undefined)).toThrow(/DATABASE_URL/);
   });
 });
 

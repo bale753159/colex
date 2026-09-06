@@ -286,14 +286,44 @@ function isCloudflareWorker(): boolean {
   return typeof navigator !== "undefined" && navigator.userAgent === "Cloudflare-Workers";
 }
 
-async function createPostgresDriver(): Promise<Driver> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
+/**
+ * Hyperdrive คือ connection pool ที่ Cloudflare ดูแลให้ที่ edge — Worker ต่อกับมันแทน Supabase
+ * ตรง ๆ จึงไม่ต้อง TLS handshake ข้ามทวีปใหม่ทุก request ทั้งที่ยังต้องเปิด client ใหม่ต่อ request
+ * ตามกฎ I/O ของ Workers  แต่ต้องไม่บังคับว่าต้องมี: บน Node ไม่มี binding นี้อยู่แล้ว และช่วง
+ * ก่อนผูก binding ระบบต้องยังเดินได้ด้วย DATABASE_URL เหมือนเดิม
+ */
+export function pickConnectionString(
+  hyperdrive: string | undefined,
+  databaseUrl: string | undefined,
+): string {
+  const chosen = hyperdrive || databaseUrl;
+  if (!chosen) {
     throw new Error("ไม่พบ DATABASE_URL กรุณาตั้งค่าการเชื่อมต่อ Supabase ใน .env.local");
   }
+  return chosen;
+}
+
+async function readHyperdriveConnectionString(): Promise<string | undefined> {
+  try {
+    const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+    const env = getCloudflareContext().env as unknown as {
+      HYPERDRIVE?: { connectionString?: string };
+    };
+    return env?.HYPERDRIVE?.connectionString;
+  } catch {
+    // ยังไม่ได้ผูก binding หรือเรียกนอกบริบท request — ถอยไปใช้ DATABASE_URL
+    return undefined;
+  }
+}
+
+async function createPostgresDriver(): Promise<Driver> {
   setPgTypeParsers();
 
   if (isCloudflareWorker()) {
+    const connectionString = pickConnectionString(
+      await readHyperdriveConnectionString(),
+      process.env.DATABASE_URL,
+    );
     return createRequestScopedPgDriver(async () => {
       const client = new Client({ connectionString });
       await client.connect();
@@ -302,7 +332,7 @@ async function createPostgresDriver(): Promise<Driver> {
   }
 
   // บน Node การ pool คือสิ่งที่ถูกต้องและเร็วกว่ามาก จึงคงพฤติกรรมเดิมไว้ทั้งหมด
-  return createPgDriver(connectionString);
+  return createPgDriver(pickConnectionString(undefined, process.env.DATABASE_URL));
 }
 
 function getDriver(): Promise<Driver> {
