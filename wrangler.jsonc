@@ -12,5 +12,15 @@
   },
   "observability": {
     "enabled": true
+  },
+  "env": {
+    "main": {
+      "name": "itstore-finance",
+      "routes": [{ "pattern": "it-store.celox.app", "custom_domain": true }]
+    },
+    "tom-mobile": {
+      "name": "itstore-finance-tom",
+      "routes": [{ "pattern": "mobile-store.celox.app", "custom_domain": true }]
+    }
   }
 }
