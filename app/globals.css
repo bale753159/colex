@@ -382,6 +382,9 @@ tbody tr:hover { background: oklch(0.985 0.002 0); }
 .deposit-form input:not(.money-input input):focus { border-color: var(--focus); box-shadow: 0 0 0 3px oklch(0.72 0.12 90 / .22); }
 .deposit-form input[aria-invalid="true"], .money-input.invalid { border-color: var(--danger); }
 .deposit-form .select-wrap.invalid select { border-color: var(--danger); }
+.customer-create-dialog { width: min(620px, 100%); }
+.customer-create-dialog .transaction-form { padding: 20px 22px 22px; }
+
 /* ปุ่มยอดที่ใช้บ่อย ใต้ช่องกรอกจำนวนเงินของ modal ฝาก/ถอน C2C */
 .quick-amounts { margin: -10px 0 18px; display: flex; flex-wrap: wrap; gap: 7px; }
 .quick-amounts button { min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: white; color: var(--ink); cursor: pointer; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; transition: background 120ms var(--ease-out), border-color 120ms var(--ease-out); }

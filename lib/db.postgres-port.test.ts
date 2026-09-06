@@ -20,6 +20,128 @@ async function seedCustomer(id: string, name: string, balance: number, withdrawa
 }
 
 describe("lib/db.ts on Postgres", () => {
+  describe("createCustomer", () => {
+    it("สร้างลูกค้าใหม่พร้อมบัญชีธนาคาร แล้วเห็นใน listCustomers", async () => {
+      const created = await mod.createCustomer({
+        name: "สมชาย ใจดี",
+        bankCode: "014",
+        bankAccountNo: "1234567890",
+        balance: 500,
+        withdrawableBalance: 300,
+        phone: "081-111-2222",
+        email: "somchai@example.com",
+      });
+
+      expect(created).toMatchObject({
+        name: "สมชาย ใจดี",
+        bankCode: "014",
+        bankAccountNo: "1234567890",
+        balance: 500,
+        withdrawableBalance: 300,
+        phone: "081-111-2222",
+        email: "somchai@example.com",
+      });
+      expect(created.id).toMatch(/^C-\d+$/);
+      expect(created.account).toMatch(/^ACC-\d+$/);
+      expect(created.initials).toBe("ส");
+      expect(created.color).toBeTruthy();
+
+      const { allCustomers } = await mod.listCustomers();
+      expect(allCustomers.find((customer) => customer.id === created.id)).toMatchObject({
+        bankCode: "014",
+        bankAccountNo: "1234567890",
+      });
+    });
+
+    it("เบอร์โทรกับอีเมลไม่บังคับ — เว้นว่างได้", async () => {
+      const created = await mod.createCustomer({
+        name: "ไม่มีเบอร์",
+        bankCode: "004",
+        bankAccountNo: "2345678901",
+        balance: 0,
+        withdrawableBalance: 0,
+      });
+      expect(created).toMatchObject({ phone: "", email: "", balance: 0, withdrawableBalance: 0 });
+    });
+
+    it("ปฏิเสธเมื่อยอดถอนได้เกินยอดคงเหลือ", async () => {
+      await expect(mod.createCustomer({
+        name: "ยอดเพี้ยน",
+        bankCode: "014",
+        bankAccountNo: "1234567890",
+        balance: 100,
+        withdrawableBalance: 200,
+      })).rejects.toThrow("ยอดที่ถอนได้ต้องไม่เกินยอดคงเหลือ");
+    });
+
+    it("ปฏิเสธเมื่อยอดติดลบ", async () => {
+      await expect(mod.createCustomer({
+        name: "ติดลบ",
+        bankCode: "014",
+        bankAccountNo: "1234567890",
+        balance: -1,
+        withdrawableBalance: 0,
+      })).rejects.toThrow("ยอดเงินต้องไม่ติดลบ");
+    });
+
+    it("ปฏิเสธเลขบัญชีที่ไม่ใช่ตัวเลข 10–15 หลัก", async () => {
+      await expect(mod.createCustomer({
+        name: "บัญชีสั้น",
+        bankCode: "014",
+        bankAccountNo: "12345",
+        balance: 0,
+        withdrawableBalance: 0,
+      })).rejects.toThrow("เลขที่บัญชีต้องเป็นตัวเลข 10–15 หลัก");
+    });
+
+    it("ปฏิเสธรหัสธนาคารที่ Celox ไม่รองรับ", async () => {
+      await expect(mod.createCustomer({
+        name: "ธนาคารมั่ว",
+        bankCode: "999",
+        bankAccountNo: "1234567890",
+        balance: 0,
+        withdrawableBalance: 0,
+      })).rejects.toThrow("รหัสธนาคารไม่รองรับ");
+    });
+
+    it("ปฏิเสธชื่อว่าง", async () => {
+      await expect(mod.createCustomer({
+        name: "   ",
+        bankCode: "014",
+        bankAccountNo: "1234567890",
+        balance: 0,
+        withdrawableBalance: 0,
+      })).rejects.toThrow("กรุณากรอกชื่อลูกค้า");
+    });
+
+    it("สร้างติดกันหลายรายแล้ว id กับเลขที่บัญชีไม่ซ้ำ", async () => {
+      const inputs = ["ก", "ข", "ค", "ง"].map((name, index) => ({
+        name,
+        bankCode: "014" as const,
+        bankAccountNo: `123456789${index}`,
+        balance: 0,
+        withdrawableBalance: 0,
+      }));
+      const created = [];
+      for (const input of inputs) created.push(await mod.createCustomer(input));
+
+      expect(new Set(created.map((customer) => customer.id)).size).toBe(4);
+      expect(new Set(created.map((customer) => customer.account)).size).toBe(4);
+    });
+
+    it("ต่อเลข id จากลูกค้าที่มีอยู่ ไม่ทับของเดิม", async () => {
+      await seedCustomer("C-2000", "เดิม", 0, 0);
+      const created = await mod.createCustomer({
+        name: "ใหม่",
+        bankCode: "014",
+        bankAccountNo: "1234567890",
+        balance: 0,
+        withdrawableBalance: 0,
+      });
+      expect(Number(created.id.replace("C-", ""))).toBeGreaterThan(2000);
+    });
+  });
+
   it("listCustomers: ส่งบัญชีธนาคารของลูกค้าออกไปให้หน้าฝาก/ถอน C2C ใช้ init ฟอร์ม", async () => {
     await seedCustomer("C-BANK", "มีบัญชี", 0, 0);
     await seedCustomer("C-NONE", "ไม่มีบัญชี", 0, 0);

@@ -13,9 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AppShell from "@/app/components/app-shell";
-import DepositFlowDialog from "@/app/components/deposit-flow-dialog";
-import WithdrawalFlowDialog from "@/app/components/withdrawal-flow-dialog";
-import type { Customer, FinanceSummary, Transaction, TransactionsResponse } from "@/lib/types";
+import type { FinanceSummary, Transaction, TransactionsResponse } from "@/lib/types";
 
 type TransactionType = "deposit" | "withdraw";
 type FilterType = "all" | TransactionType;
@@ -53,12 +51,9 @@ function TransactionStatusBadge({ status }: Pick<Transaction, "status">) {
 
 export default function FinanceDashboard() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
   const [summary, setSummary] = useState<FinanceSummary | null>(null);
   const [filter, setFilter] = useState<FilterType>("all");
   const [search, setSearch] = useState("");
-  const [dialog, setDialog] = useState<TransactionType | null>(null);
-  const [selectedCustomer, setSelectedCustomer] = useState("");
   const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState("");
 
@@ -70,9 +65,7 @@ export default function FinanceDashboard() {
       if (!response.ok) throw new Error("โหลดข้อมูลธุรกรรมไม่สำเร็จ");
       const result = await response.json() as TransactionsResponse;
       setTransactions(result.transactions);
-      setCustomers(result.customers);
       setSummary(result.summary);
-      setSelectedCustomer((current) => current || result.customers[0]?.id || "");
     } catch (error) {
       setDataError(error instanceof Error ? error.message : "โหลดข้อมูลธุรกรรมไม่สำเร็จ");
     } finally {
@@ -102,25 +95,6 @@ export default function FinanceDashboard() {
     });
   }, [filter, search, transactions]);
 
-  const activeCustomer = customers.find((customer) => customer.id === selectedCustomer) ?? customers[0];
-
-  function openTransaction(type: TransactionType, customerId = customers[0]?.id ?? "") {
-    if (!customerId) return;
-    setDataError("");
-    setDialog(type);
-    setSelectedCustomer(customerId);
-  }
-
-  function closeDialog() {
-    setDialog(null);
-    setDataError("");
-  }
-
-  function completeDeposit() {
-    closeDialog();
-    void loadData();
-  }
-
   return (
     <AppShell active="overview" searchValue={search} onSearchChange={setSearch}>
         <div className="page-wrap" id="overview">
@@ -131,8 +105,6 @@ export default function FinanceDashboard() {
             </div>
             <div className="heading-actions">
               <button className="button secondary-button"><Download size={17} />ส่งออกรายงาน</button>
-              <button className="button deposit-button" onClick={() => openTransaction("deposit")} disabled={!customers.length}><ArrowDownLeft size={18} />ฝากเงิน</button>
-              <button className="button withdraw-button" onClick={() => openTransaction("withdraw")} disabled={!customers.length}><ArrowUpRight size={18} />ถอนเงิน</button>
             </div>
           </section>
 
@@ -193,7 +165,7 @@ export default function FinanceDashboard() {
 
             <div className="table-wrap">
               <table>
-                <thead><tr><th>ลูกค้า</th><th>รายการ</th><th>วันและเวลา</th><th>สถานะ</th><th className="align-right">จำนวนเงิน</th><th><span className="sr-only">จัดการ</span></th></tr></thead>
+                <thead><tr><th>ลูกค้า</th><th>รายการ</th><th>วันและเวลา</th><th>สถานะ</th><th className="align-right">จำนวนเงิน</th></tr></thead>
                 <tbody>
                   {visibleTransactions.map((transaction) => (
                     <tr key={transaction.id}>
@@ -202,7 +174,7 @@ export default function FinanceDashboard() {
                       <td><div className="date-cell"><strong>{transaction.date}</strong><small>{transaction.time} น.</small></div></td>
                       <td className="status-cell"><TransactionStatusBadge status={transaction.status} /></td>
                       <td className={`amount-cell ${transaction.type} status-${transaction.status}`}>{transaction.type === "deposit" ? "+" : "−"}{currency.format(transaction.amount).replace("฿", "")} <span>฿</span></td>
-                      <td><div className="row-actions"><button className="mini-action deposit" onClick={() => openTransaction("deposit", transaction.customer.id)} title="ฝากเงินให้ลูกค้ารายนี้"><ArrowDownLeft size={16} /><span>ฝาก</span></button><button className="mini-action withdraw" onClick={() => openTransaction("withdraw", transaction.customer.id)} title="ถอนเงินให้ลูกค้ารายนี้"><ArrowUpRight size={16} /><span>ถอน</span></button></div></td>
+                      
                     </tr>
                   ))}
                 </tbody>
@@ -214,26 +186,6 @@ export default function FinanceDashboard() {
           </section>
         </div>
 
-      {dialog === "deposit" && activeCustomer && (
-        <DepositFlowDialog
-          customer={activeCustomer}
-          customers={customers}
-          onCustomerChange={setSelectedCustomer}
-          onClose={closeDialog}
-          onChanged={() => { void loadData(true); }}
-          onCompleted={completeDeposit}
-        />
-      )}
-
-      {dialog === "withdraw" && activeCustomer && (
-        <WithdrawalFlowDialog
-          customer={activeCustomer}
-          customers={customers}
-          onCustomerChange={setSelectedCustomer}
-          onClose={closeDialog}
-          onCompleted={() => void loadData()}
-        />
-      )}
     </AppShell>
   );
 }

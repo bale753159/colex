@@ -1,3 +1,4 @@
+import { isCeloxBankCode } from "./celox/banks";
 import { db, tx, type Queryable, type Tx } from "./sql";
 import type {
   C2CDepositSlipResponse,
@@ -23,6 +24,7 @@ import type {
 import type {
   CreateTransactionInput,
   Customer,
+  CreateCustomerInput,
   CustomerWithStats,
   FinanceSummary,
   Transaction,
@@ -353,6 +355,59 @@ async function getSummary(t: Queryable, from?: string, to?: string): Promise<Fin
  * locale ของฐานข้อมูลซึ่งครอบ Unicode ทั้งหมด ข้อมูลที่ค้นในโปรเจกต์นี้เป็น ASCII หรือภาษาไทย
  * (ไทยไม่มีตัวพิมพ์เล็กใหญ่) ช่องว่างนี้จึงไม่ส่งผลกับข้อมูลชุดนี้
  */
+// สีของ avatar ที่ app/globals.css รองรับ — วนตามลำดับที่สร้างเพื่อให้ตารางไม่เป็นสีเดียวกันทั้งหน้า
+const AVATAR_COLORS = ["violet", "cyan", "amber", "blue", "rose"] as const;
+
+function assertMoneyNotNegative(amount: number, label: string) {
+  const satang = toSatang(amount);
+  if (!Number.isFinite(amount) || !Number.isSafeInteger(satang) || satang < 0) {
+    throw new Error(`ยอดเงินต้องไม่ติดลบ (${label})`);
+  }
+  return satang;
+}
+
+export async function createCustomer(input: CreateCustomerInput): Promise<Customer> {
+  const name = input.name.trim();
+  if (!name) throw new Error("กรุณากรอกชื่อลูกค้า");
+  if (!isCeloxBankCode(input.bankCode)) throw new Error("รหัสธนาคารไม่รองรับ");
+  const bankAccountNo = input.bankAccountNo.replace(/[\s-]/g, "");
+  if (!/^\d{10,15}$/.test(bankAccountNo)) throw new Error("เลขที่บัญชีต้องเป็นตัวเลข 10–15 หลัก");
+
+  const balanceSatang = assertMoneyNotNegative(input.balance, "ยอดคงเหลือ");
+  const withdrawableSatang = assertMoneyNotNegative(input.withdrawableBalance, "ยอดที่ถอนได้");
+  // ตรงกับ CHECK ในตาราง customers — เช็คก่อนเพื่อให้ได้ข้อความไทยแทน error ของ Postgres
+  if (withdrawableSatang > balanceSatang) throw new Error("ยอดที่ถอนได้ต้องไม่เกินยอดคงเหลือ");
+
+  const now = new Date().toISOString();
+  // id/เลขที่บัญชีต่อจากเลขสูงสุดที่มี ถ้าชนกับ request อื่นระหว่างนั้นให้ไล่เลขขึ้นแล้วลองใหม่
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const row = await db.first<{ next_number: number }>(`
+      SELECT COALESCE(MAX(NULLIF(regexp_replace(id, '\\D', '', 'g'), '')::bigint), 1000) + 1 AS next_number
+      FROM customers
+    `);
+    const nextNumber = Number(row?.next_number ?? 1001) + attempt;
+    const id = `C-${nextNumber}`;
+    const account = `ACC-${nextNumber}`;
+    const color = AVATAR_COLORS[nextNumber % AVATAR_COLORS.length];
+
+    try {
+      const inserted = await db.first<CustomerRow>(`
+        INSERT INTO customers (id, name, account, initials, color, phone, email,
+          bank_code, bank_account_no, balance_satang, withdrawable_satang, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING *
+      `, [id, name, account, Array.from(name)[0] ?? "?", color,
+          input.phone?.trim() ?? "", input.email?.trim() ?? "",
+          input.bankCode, bankAccountNo, balanceSatang, withdrawableSatang, now]);
+      if (inserted) return mapCustomer(inserted);
+    } catch (error) {
+      // 23505 = unique_violation: id หรือ account ถูกใช้ไปแล้ว ลองเลขถัดไป
+      if ((error as { code?: string }).code !== "23505") throw error;
+    }
+  }
+  throw new Error("สร้างลูกค้าไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+}
+
 export async function listCustomers(options: { search?: string; from?: string; to?: string } = {}) {
   const period = dateClause(options.from, options.to);
   const search = `%${options.search?.trim() ?? ""}%`;
