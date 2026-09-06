@@ -8,5 +8,5 @@ export default defineConfig([
   // ".claude/**" holds git worktrees, each a full copy of this repo including its own
   // .next build output. Without it, linting the project also lints every worktree's
   // generated bundles — thousands of findings in code nobody wrote.
-  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", ".claude/**"]),
+  globalIgnores([".next/**", ".open-next/**", "out/**", "build/**", "next-env.d.ts", ".claude/**"]),
 ]);
