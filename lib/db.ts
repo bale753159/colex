@@ -5,6 +5,7 @@ import type {
   C2CTransactionResponse,
   C2CTransactionStatus,
   CancelC2CTransactionResponse,
+  CeloxC2CCallbackRawLogItem,
   CeloxC2CCallbackRequest,
   CeloxCallbackEvent,
   CeloxCallbackProcessingState,
@@ -2279,6 +2280,54 @@ export async function listCustomerCeloxCallbacks(customerId: string, limit = 10)
     LIMIT ?
   `, [customerId, safeLimit]);
   return rows.map(mapCeloxCallback);
+}
+
+type CeloxC2CCallbackRawLogRow = {
+  id: number;
+  received_at: string;
+  request_url: string;
+  request_body: string | null;
+  response_status: number;
+  response_body: string | null;
+};
+
+function mapC2CCallbackRawLog(row: CeloxC2CCallbackRawLogRow): CeloxC2CCallbackRawLogItem {
+  return {
+    id: row.id,
+    receivedAt: row.received_at,
+    requestUrl: row.request_url,
+    requestBody: row.request_body,
+    responseStatus: row.response_status,
+    responseBody: row.response_body,
+  };
+}
+
+export async function insertC2CCallbackRawLog(input: {
+  requestUrl: string;
+  requestBody: string | null;
+  responseStatus: number;
+  responseBody: string | null;
+}) {
+  await db.run(`
+    INSERT INTO celox_c2c_callback_raw_logs (received_at, request_url, request_body, response_status, response_body)
+    VALUES (?, ?, ?, ?, ?)
+  `, [
+    new Date().toISOString(),
+    input.requestUrl,
+    input.requestBody,
+    input.responseStatus,
+    input.responseBody,
+  ]);
+}
+
+export async function listC2CCallbackRawLogs(limit = 50) {
+  const safeLimit = Math.min(Math.max(Math.trunc(limit) || 50, 1), 200);
+  const rows = await db.query<CeloxC2CCallbackRawLogRow>(`
+    SELECT * FROM celox_c2c_callback_raw_logs
+    ORDER BY received_at DESC, id DESC
+    LIMIT ?
+  `, [safeLimit]);
+  return rows.map(mapC2CCallbackRawLog);
 }
 
 const STALE_CELOX_OPERATION_MS = 5 * 60 * 1_000;

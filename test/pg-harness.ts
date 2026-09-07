@@ -14,6 +14,7 @@ const MIGRATIONS_DIR = fileURLToPath(
 );
 
 const TABLES = [
+  "celox_c2c_callback_raw_logs",
   "celox_c2c_callback_events",
   "celox_callback_events",
   "celox_c2c_withdrawal_reservations",

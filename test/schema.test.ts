@@ -7,17 +7,18 @@ afterAll(async () => { await teardownTestDatabase(); });
 
 // จำนวนตาราง/index/FK ด้านล่างมาจากการนับจริงกับ catalog ของ migration ที่โหลดแล้ว
 // (ไม่ใช่นับด้วยตาเปล่า) ดูคำสั่งและผลลัพธ์ที่ใช้ยืนยันตัวเลขเหล่านี้ใน task-2-report.md
-const EXPECTED_TABLE_COUNT = 10;
-const EXPECTED_EXPLICIT_INDEX_COUNT = 18; // เฉพาะ CREATE INDEX ที่ตั้งชื่อ idx_* เอง ไม่รวม index ที่ Postgres สร้างอัตโนมัติให้ PRIMARY KEY/UNIQUE
+const EXPECTED_TABLE_COUNT = 11;
+const EXPECTED_EXPLICIT_INDEX_COUNT = 19; // เฉพาะ CREATE INDEX ที่ตั้งชื่อ idx_* เอง ไม่รวม index ที่ Postgres สร้างอัตโนมัติให้ PRIMARY KEY/UNIQUE
 const EXPECTED_FOREIGN_KEY_COUNT = 15;
 
 describe("schema", () => {
-  it("สร้างตารางครบทั้ง 10 ตาราง", async () => {
+  it("สร้างตารางครบทั้ง 11 ตาราง", async () => {
     const rows = await db.query<{ table_name: string }>(
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name");
     const tableNames = rows.map((r) => r.table_name).sort();
     expect(tableNames).toEqual([
       "celox_c2c_callback_events",
+      "celox_c2c_callback_raw_logs",
       "celox_c2c_transactions",
       "celox_c2c_withdrawal_reservations",
       "celox_callback_events",

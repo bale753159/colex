@@ -271,6 +271,12 @@ tbody tr:hover { background: oklch(0.974 0.007 259); }
 .customer-table th:nth-child(2), .customer-table th:nth-child(3), .customer-table th:nth-child(4), .customer-table th:nth-child(5) { width: 145px; }
 .customer-table th:nth-child(6) { width: 170px; }
 .customer-table th:nth-child(7) { width: 224px; }
+.callback-log-table { min-width: 720px; }
+.callback-log-table th:nth-child(1) { width: 190px; }
+.callback-log-table th:nth-child(3) { width: 110px; }
+.callback-log-row { cursor: pointer; }
+.callback-log-row:hover { background: var(--surface); }
+.callback-log-url { overflow: hidden; color: var(--ink-soft); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 .customer-money { text-align: right; font-variant-numeric: tabular-nums; }
 .customer-money strong { display: block; font-size: 12px; font-weight: 650; white-space: nowrap; }
 .customer-money small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; white-space: nowrap; }
@@ -607,6 +613,9 @@ tbody tr:hover { background: oklch(0.974 0.007 259); }
 .c2c-empty svg, .c2c-detail-error svg { color: var(--primary-strong); }
 .c2c-empty h3, .c2c-detail-error h3 { margin: 12px 0 4px; color: var(--ink); font-size: 14px; }
 .c2c-empty p, .c2c-detail-error p { max-width: 52ch; margin: 0; font-size: 11px; line-height: 1.55; }
+.callback-log-body { padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.callback-log-body h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); }
+.callback-log-body pre { margin: 0; padding: 12px; border-radius: var(--radius-sm); background: var(--surface); overflow-x: auto; color: var(--ink-soft); font-size: 10px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .c2c-detail-error svg { color: var(--danger); }
 .c2c-detail-error .button { margin-top: 16px; }
 .c2c-authority-note { margin-top: 16px; padding: 13px 16px; border-radius: var(--radius-md); background: var(--surface); color: var(--muted); display: flex; align-items: flex-start; gap: 9px; font-size: 10px; line-height: 1.55; }

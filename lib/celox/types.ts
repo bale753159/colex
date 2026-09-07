@@ -343,6 +343,22 @@ export type CustomerCeloxCallbacksResponse = {
   withdrawalHolds: CeloxWithdrawalHold[];
 };
 
+// Log ดิบของทุก request ที่เข้ามาที่ /api/celox/c2c/callback ไม่ว่าจะผ่านการตรวจ
+// ลายเซ็นหรือ validate สำเร็จหรือไม่ ใช้สำหรับหน้า log callback c2c เท่านั้น
+// แยกจาก CeloxCallbackEvent ซึ่งเก็บ field ที่ parse แล้วสำหรับ business logic
+export type CeloxC2CCallbackRawLogItem = {
+  id: number;
+  receivedAt: string;
+  requestUrl: string;
+  requestBody: string | null;
+  responseStatus: number;
+  responseBody: string | null;
+};
+
+export type CeloxC2CCallbackRawLogsResponse = {
+  logs: CeloxC2CCallbackRawLogItem[];
+};
+
 export type CeloxWithdrawalHold = {
   key: string;
   kind: "creation" | "confirmation";
