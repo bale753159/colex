@@ -1,57 +1,103 @@
-import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
-import { canonicalizeCeloxC2CCallback, isRetryablePostgresError } from "./c2c-callback.server";
-import type { CeloxC2CCallbackRequest } from "./types";
+import { createHash, createHmac } from "node:crypto";
+import { afterEach, describe, expect, it } from "vitest";
+import { CeloxError } from "./client.server";
+import { hashRawC2CCallbackBody, isRetryablePostgresError, verifyCeloxC2CCallbackSignatureV2 } from "./c2c-callback.server";
 
-function basePayload(overrides: Partial<CeloxC2CCallbackRequest> = {}): CeloxC2CCallbackRequest {
-  return {
-    transactionId: randomUUID(),
-    orderId: "TXN-2608-00993",
-    referenceId: "ORDER-4471",
-    status: "PENDING_TRANSFER",
-    amount: 2500,
-    occurredAt: null,
-    parts: [
-      { transactionId: randomUUID(), orderId: "TXN-2608-00993", amount: 2500, status: "PENDING_TRANSFER" },
-    ],
-    ...overrides,
-  };
+const TEST_SECRET = "test-c2c-callback-secret";
+
+// Built independently from the production signer — computed straight from the
+// v2 material formula in the Celox manual — so the test can't pass just
+// because both sides share a bug.
+function signV2(rawBody: string, timestamp: string, secret = TEST_SECRET) {
+  const bodyHash = createHash("sha256").update(rawBody, "utf8").digest("hex");
+  const material = `v2\n${timestamp}\n${bodyHash}`;
+  return createHmac("sha256", secret).update(material, "utf8").digest("hex");
 }
 
-describe("canonicalizeCeloxC2CCallback", () => {
-  it("appends parts after the six base fields when transferTo is absent", () => {
-    const payload = basePayload();
-    const canonical = JSON.parse(canonicalizeCeloxC2CCallback(payload));
-    expect(Object.keys(canonical)).toEqual([
-      "transactionId", "orderId", "referenceId", "status", "amount", "occurredAt", "parts",
-    ]);
-  });
-
-  it("orders transferTo before parts before unfilledAmount when all are present", () => {
-    const payload = basePayload({
-      transferTo: { bankCode: "002", bankName: "ธนาคารกรุงเทพ", accountName: "สมชาย ใจดี", accountNo: "1234567890" },
-      unfilledAmount: 0,
-    });
-    const canonical = JSON.parse(canonicalizeCeloxC2CCallback(payload));
-    expect(Object.keys(canonical)).toEqual([
-      "transactionId", "orderId", "referenceId", "status", "amount", "occurredAt",
-      "transferTo", "parts", "unfilledAmount",
-    ]);
-  });
-
-  it("signs unfilledAmount as a bare number, including zero", () => {
-    const payload = basePayload({ unfilledAmount: 0 });
-    const canonical = JSON.parse(canonicalizeCeloxC2CCallback(payload));
-    expect(canonical.unfilledAmount).toBe(0);
-  });
-
-  it("rebuilds each parts element in fixed key order regardless of input order", () => {
-    const part = { status: "PENDING_TRANSFER", amount: 500, orderId: "TXN-2608-00994-1", transactionId: randomUUID() };
-    const payload = basePayload({ parts: [part] });
-    const canonical = canonicalizeCeloxC2CCallback(payload);
-    expect(canonical).toContain(
-      `"parts":[{"transactionId":"${part.transactionId}","orderId":"${part.orderId}","amount":${part.amount},"status":"${part.status}"}]`,
+describe("hashRawC2CCallbackBody", () => {
+  it("returns the lowercase sha256 hex digest of the exact raw bytes given", () => {
+    const rawBody = '{"transactionId":"5c1f9a2e"}';
+    expect(hashRawC2CCallbackBody(rawBody)).toBe(
+      createHash("sha256").update(rawBody, "utf8").digest("hex"),
     );
+  });
+
+  it("produces a different hash when even a single byte of the body differs", () => {
+    const a = hashRawC2CCallbackBody('{"amount":2500}');
+    const b = hashRawC2CCallbackBody('{"amount":2501}');
+    expect(a).not.toBe(b);
+  });
+});
+
+describe("verifyCeloxC2CCallbackSignatureV2", () => {
+  afterEach(() => {
+    delete process.env.CELOX_C2C_CALLBACK_SECRET;
+  });
+
+  function setSecret() {
+    process.env.CELOX_C2C_CALLBACK_SECRET = TEST_SECRET;
+  }
+
+  it("accepts a validly signed body regardless of key order or added fields (raw bytes are hashed as opaque)", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-...","status":"SUCCESS","aBrandNewField":"anything"}';
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, signV2(rawBody, timestamp))).not.toThrow();
+  });
+
+  it("rejects when the signature does not match the raw body", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, signV2('{"tampered":true}', timestamp)))
+      .toThrow(CeloxError);
+  });
+
+  it("rejects when X-Celox-Timestamp is missing even if the signature header is present", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, null, signV2(rawBody, timestamp))).toThrow(CeloxError);
+  });
+
+  it("rejects when X-Celox-Signature is missing even if the timestamp header is present", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, null)).toThrow(CeloxError);
+  });
+
+  it("rejects when both headers are missing (org policy: never trust an unsigned callback)", () => {
+    setSecret();
+    expect(() => verifyCeloxC2CCallbackSignatureV2('{"transactionId":"5c1f9a2e-..."}', null, null)).toThrow(CeloxError);
+  });
+
+  it("rejects a timestamp more than 300 seconds in the past", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000) - 301);
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, signV2(rawBody, timestamp))).toThrow(CeloxError);
+  });
+
+  it("rejects a timestamp more than 300 seconds in the future", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000) + 301);
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, signV2(rawBody, timestamp))).toThrow(CeloxError);
+  });
+
+  it("accepts a timestamp exactly at the 300 second boundary", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000) - 300);
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, signV2(rawBody, timestamp))).not.toThrow();
+  });
+
+  it("rejects a non-numeric timestamp header", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, "not-a-number", signV2(rawBody, "not-a-number")))
+      .toThrow(CeloxError);
   });
 });
 

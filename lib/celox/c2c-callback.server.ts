@@ -2,7 +2,6 @@ import "server-only";
 
 import { Buffer } from "node:buffer";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import type { CeloxC2CCallbackRequest } from "./types";
 import { CeloxError } from "./client.server";
 import {
   markCeloxC2CCallbackEventFailed,
@@ -11,6 +10,8 @@ import {
 
 const MAX_PROCESSING_ATTEMPTS = 3;
 const RETRY_JITTER_CAPS_MS = [500, 1_000] as const;
+// กันการ replay callback ที่ดักจับไว้ก่อนหน้ามายิงซ้ำทีหลัง — ต้องเช็คแม้ลายเซ็นจะตรง
+const REPLAY_WINDOW_SECONDS = 300;
 
 function callbackSecret() {
   const secret = process.env.CELOX_C2C_CALLBACK_SECRET?.trim()
@@ -26,70 +27,53 @@ function callbackSecret() {
   return secret;
 }
 
+function unauthenticated(message: string): never {
+  throw new CeloxError({ code: "unauthenticated", message, httpStatus: 401 });
+}
+
+// ใช้เป็น fingerprint กันข้อมูลซ้ำเวลาบันทึกลง inbox เท่านั้น ไม่เกี่ยวกับการยืนยันตัวตน
+// เซ็น raw bytes ทั้งก้อนตรงๆ จึงไม่มีวันตกยุคเมื่อ Celox เพิ่ม field ใหม่ในอนาคต
+export function hashRawC2CCallbackBody(rawBody: string) {
+  return createHash("sha256").update(rawBody, "utf8").digest("hex");
+}
+
 /**
- * C2C signs six fields in this exact order. `event` is deliberately excluded;
- * `transferTo`, `parts` and `unfilledAmount` are appended, in that order,
- * only when the incoming body actually contains that key.
+ * v2: material = "v2" + "\n" + X-Celox-Timestamp (verbatim) + "\n" + sha256hex(raw body)
+ * เซ็น raw body ทั้งก้อนเป็น opaque bytes — ไม่มี field list ให้ sync ตามเมื่อ Celox เพิ่ม
+ * field ใหม่ ต่างจาก scheme เดิมที่เซ็นเฉพาะ field ที่เลือกมา
+ *
+ * นโยบายของโปรเจกต์นี้: บังคับต้องมีทั้ง X-Celox-Timestamp และ X-Celox-Signature เสมอ
+ * แม้ Celox เอกสารจะระบุว่า verification เป็น optional และอาจไม่ส่ง header ทั้งคู่มาเมื่อ
+ * credential เก่าเกินไป — เรายอมรับความเสี่ยงนั้นไม่ได้เพราะ callback นี้เกี่ยวกับการหักเงินจริง
  */
-export function canonicalizeCeloxC2CCallback(payload: CeloxC2CCallbackRequest) {
-  const signedPayload: Record<string, unknown> = {
-    transactionId: payload.transactionId,
-    orderId: payload.orderId,
-    referenceId: payload.referenceId,
-    status: payload.status,
-    amount: payload.amount,
-    occurredAt: payload.occurredAt,
-  };
-  if (Object.hasOwn(payload, "transferTo")) {
-    const transferTo = payload.transferTo;
-    signedPayload.transferTo = {
-      bankCode: transferTo?.bankCode ?? null,
-      bankName: transferTo?.bankName ?? null,
-      accountName: transferTo?.accountName ?? null,
-      accountNo: transferTo?.accountNo ?? null,
-    };
-  }
-  if (Object.hasOwn(payload, "parts")) {
-    signedPayload.parts = payload.parts.map((part) => ({
-      transactionId: part.transactionId,
-      orderId: part.orderId,
-      amount: part.amount,
-      status: part.status,
-    }));
-  }
-  if (Object.hasOwn(payload, "unfilledAmount")) {
-    signedPayload.unfilledAmount = payload.unfilledAmount;
-  }
-  return JSON.stringify(signedPayload);
-}
-
-export function hashCeloxC2CCallbackPayload(payload: CeloxC2CCallbackRequest) {
-  return createHash("sha256").update(canonicalizeCeloxC2CCallback(payload), "utf8").digest("hex");
-}
-
-export function verifyCeloxC2CCallbackSignature(
-  payload: CeloxC2CCallbackRequest,
-  headerValue: string | null,
+export function verifyCeloxC2CCallbackSignatureV2(
+  rawBody: string,
+  timestampHeader: string | null,
+  signatureHeader: string | null,
 ) {
-  const supplied = headerValue?.trim().toLowerCase().replace(/^sha256=/, "") ?? "";
-  if (!/^[0-9a-f]{64}$/.test(supplied)) {
-    throw new CeloxError({
-      code: "unauthenticated",
-      message: "X-Celox-Signature หายไปหรือมีรูปแบบไม่ถูกต้อง",
-      httpStatus: 401,
-    });
+  if (!timestampHeader) unauthenticated("X-Celox-Timestamp หายไป");
+  if (!signatureHeader) unauthenticated("X-Celox-Signature หายไป");
+
+  if (!/^\d+$/.test(timestampHeader)) {
+    unauthenticated("X-Celox-Timestamp มีรูปแบบไม่ถูกต้อง");
+  }
+  const timestampSeconds = Number(timestampHeader);
+  const skewSeconds = Math.abs(Math.floor(Date.now() / 1000) - timestampSeconds);
+  if (skewSeconds > REPLAY_WINDOW_SECONDS) {
+    unauthenticated("X-Celox-Timestamp ห่างจากเวลาปัจจุบันเกินกำหนด (ป้องกัน replay)");
   }
 
-  const expected = createHmac("sha256", callbackSecret())
-    .update(canonicalizeCeloxC2CCallback(payload), "utf8")
-    .digest();
+  const supplied = signatureHeader.trim().toLowerCase().replace(/^sha256=/, "");
+  if (!/^[0-9a-f]{64}$/.test(supplied)) {
+    unauthenticated("X-Celox-Signature มีรูปแบบไม่ถูกต้อง");
+  }
+
+  const bodyHash = hashRawC2CCallbackBody(rawBody);
+  const material = `v2\n${timestampHeader}\n${bodyHash}`;
+  const expected = createHmac("sha256", callbackSecret()).update(material, "utf8").digest();
   const received = Buffer.from(supplied, "hex");
   if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
-    throw new CeloxError({
-      code: "unauthenticated",
-      message: "ลายเซ็น Callback C2C จาก Celox ไม่ถูกต้อง",
-      httpStatus: 401,
-    });
+    unauthenticated("ลายเซ็น Callback C2C จาก Celox ไม่ถูกต้อง");
   }
 }
 

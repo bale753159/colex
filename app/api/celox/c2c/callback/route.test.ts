@@ -1,4 +1,4 @@
-import { randomUUID, createHmac } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/sql";
 import { setupTestDatabase, teardownTestDatabase, truncateAll } from "@/test/pg-harness";
@@ -8,27 +8,16 @@ const TEST_SECRET = "test-c2c-callback-secret";
 const CALLBACK_URL = "https://app.example.com/api/celox/c2c/callback";
 let POST: typeof import("./route")["POST"];
 
-// Built independently from the production canonicalizer (same fixture as
-// lib/celox/c2c-callback-handler.server.test.ts) so a shared bug can't hide.
-function canonicalFixture(payload: CeloxC2CCallbackRequest) {
-  const signed: Record<string, unknown> = {
-    transactionId: payload.transactionId,
-    orderId: payload.orderId,
-    referenceId: payload.referenceId,
-    status: payload.status,
-    amount: payload.amount,
-    occurredAt: payload.occurredAt,
-  };
-  if (payload.transferTo) signed.transferTo = payload.transferTo;
-  signed.parts = payload.parts.map((p) => ({
-    transactionId: p.transactionId, orderId: p.orderId, amount: p.amount, status: p.status,
-  }));
-  if (payload.unfilledAmount !== undefined) signed.unfilledAmount = payload.unfilledAmount;
-  return JSON.stringify(signed);
+// Built independently from the production signer, straight from the v2
+// material formula in the Celox manual, so a shared bug can't hide.
+function signV2(rawBody: string, timestamp: string, secret = TEST_SECRET) {
+  const bodyHash = createHash("sha256").update(rawBody, "utf8").digest("hex");
+  const material = `v2\n${timestamp}\n${bodyHash}`;
+  return createHmac("sha256", secret).update(material, "utf8").digest("hex");
 }
 
-function sign(payload: CeloxC2CCallbackRequest) {
-  return createHmac("sha256", TEST_SECRET).update(canonicalFixture(payload), "utf8").digest("hex");
+function currentTimestamp() {
+  return String(Math.floor(Date.now() / 1000));
 }
 
 function withdrawalCallback(overrides: Partial<CeloxC2CCallbackRequest> = {}): CeloxC2CCallbackRequest {
@@ -74,9 +63,14 @@ describe("POST /api/celox/c2c/callback — raw log", () => {
   it("บันทึก url, request body และ response ที่ถูกต้องเมื่อ callback ผ่านการตรวจ", async () => {
     const payload = withdrawalCallback();
     const body = JSON.stringify(payload);
+    const timestamp = currentTimestamp();
     const request = new Request(CALLBACK_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Celox-Signature": sign(payload) },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Celox-Timestamp": timestamp,
+        "X-Celox-Signature": signV2(body, timestamp),
+      },
       body,
     });
 
@@ -111,9 +105,14 @@ describe("POST /api/celox/c2c/callback — raw log", () => {
   it("บันทึก response 401 พร้อม request body ดิบเมื่อลายเซ็นไม่ถูกต้อง", async () => {
     const payload = withdrawalCallback();
     const body = JSON.stringify(payload);
+    const timestamp = currentTimestamp();
     const request = new Request(CALLBACK_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Celox-Signature": "0".repeat(64) },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Celox-Timestamp": timestamp,
+        "X-Celox-Signature": "0".repeat(64),
+      },
       body,
     });
 
@@ -124,5 +123,39 @@ describe("POST /api/celox/c2c/callback — raw log", () => {
     expect(logs.length).toBe(1);
     expect(logs[0].request_body).toBe(body);
     expect(logs[0].response_status).toBe(401);
+  });
+
+  it("บันทึก response 401 เมื่อไม่มี X-Celox-Timestamp มาเลย (นโยบายบังคับต้องมี signature เสมอ)", async () => {
+    const payload = withdrawalCallback();
+    const body = JSON.stringify(payload);
+    const request = new Request(CALLBACK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Celox-Signature": signV2(body, currentTimestamp()),
+      },
+      body,
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(401);
+  });
+
+  it("บันทึก response 401 เมื่อ X-Celox-Timestamp เก่าเกิน 300 วินาที (ป้องกัน replay)", async () => {
+    const payload = withdrawalCallback();
+    const body = JSON.stringify(payload);
+    const staleTimestamp = String(Math.floor(Date.now() / 1000) - 301);
+    const request = new Request(CALLBACK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Celox-Timestamp": staleTimestamp,
+        "X-Celox-Signature": signV2(body, staleTimestamp),
+      },
+      body,
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(401);
   });
 });

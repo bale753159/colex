@@ -298,6 +298,10 @@ export type CeloxC2CCallbackRequest = {
   parts: [C2CCallbackPart, ...C2CCallbackPart[]];
   // มีเฉพาะ callback ฝั่งถอน C2C — เป็น 0 เมื่อคู่ปิดเต็มยอด
   unfilledAmount?: number;
+  // เฉพาะ callback ถอน C2C ที่ทำให้ทั้งกลุ่มจบ (terminal) เท่านั้น — ผลรวมยอดของทุกพาร์ทที่ SUCCESS
+  settledTotal?: number;
+  // เฉพาะ callback ถอน C2C ที่ทำให้ทั้งกลุ่มจบ (terminal) เท่านั้น — ผลรวมยอดที่ยังไม่สำเร็จของทุกพาร์ท
+  unfilledTotal?: number;
 };
 
 // Celox ignores the acknowledgement body, but keeping it typed makes the

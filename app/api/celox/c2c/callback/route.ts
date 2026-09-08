@@ -46,7 +46,12 @@ async function handleCallback(request: Request, requestBody: { current: string |
   } catch {
     return errorResponse(400, "รูปแบบ JSON ของ Callback C2C ไม่ถูกต้อง", "invalid_request");
   }
-  return acceptCeloxC2CCallbackPayload(payload, request.headers.get("X-Celox-Signature"));
+  return acceptCeloxC2CCallbackPayload(
+    payload,
+    requestBody.current,
+    request.headers.get("X-Celox-Timestamp"),
+    request.headers.get("X-Celox-Signature"),
+  );
 }
 
 export async function POST(request: Request): Promise<Response> {

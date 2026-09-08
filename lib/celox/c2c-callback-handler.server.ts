@@ -2,9 +2,9 @@ import "server-only";
 
 import { after } from "next/server";
 import {
-  hashCeloxC2CCallbackPayload,
+  hashRawC2CCallbackBody,
   processCeloxC2CCallbackEventWithRetry,
-  verifyCeloxC2CCallbackSignature,
+  verifyCeloxC2CCallbackSignatureV2,
 } from "./c2c-callback.server";
 import { isCeloxC2CCallbackRequest } from "./c2c-callback-validation";
 import { CeloxError } from "./client.server";
@@ -27,6 +27,8 @@ export function looksLikeCeloxC2CCallback(value: unknown) {
 
 export async function acceptCeloxC2CCallbackPayload(
   payload: unknown,
+  rawBody: string,
+  timestampHeader: string | null,
   signatureHeader: string | null,
 ) {
   if (!isCeloxC2CCallbackRequest(payload)) {
@@ -34,7 +36,7 @@ export async function acceptCeloxC2CCallbackPayload(
   }
 
   try {
-    verifyCeloxC2CCallbackSignature(payload, signatureHeader);
+    verifyCeloxC2CCallbackSignatureV2(rawBody, timestampHeader, signatureHeader);
   } catch (error) {
     if (error instanceof CeloxError) {
       return errorResponse(error.httpStatus, error.message, error.code);
@@ -44,7 +46,7 @@ export async function acceptCeloxC2CCallbackPayload(
 
   let queued: Awaited<ReturnType<typeof enqueueCeloxC2CCallbackEvent>>;
   try {
-    queued = await enqueueCeloxC2CCallbackEvent(payload, hashCeloxC2CCallbackPayload(payload));
+    queued = await enqueueCeloxC2CCallbackEvent(payload, hashRawC2CCallbackBody(rawBody));
   } catch {
     return errorResponse(503, "บันทึก Callback C2C ลงระบบไม่สำเร็จ", "persistence_error");
   }

@@ -56,7 +56,12 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse(400, "รูปแบบ JSON ของ Callback ไม่ถูกต้อง", "invalid_request");
   }
   if (looksLikeCeloxC2CCallback(payload)) {
-    return acceptCeloxC2CCallbackPayload(payload, request.headers.get("X-Celox-Signature"));
+    return acceptCeloxC2CCallbackPayload(
+      payload,
+      rawBody.toString("utf8"),
+      request.headers.get("X-Celox-Timestamp"),
+      request.headers.get("X-Celox-Signature"),
+    );
   }
 
   try {

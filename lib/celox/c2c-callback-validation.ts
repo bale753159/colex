@@ -8,20 +8,10 @@ import type {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STATUS_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:Z|([+-])(\d{2}):(\d{2}))$/;
-const CALLBACK_KEYS = new Set([
-  "transactionId",
-  "orderId",
-  "referenceId",
-  "status",
-  "amount",
-  "occurredAt",
-  "event",
-  "transferTo",
-  "parts",
-  "unfilledAmount",
-]);
+// raw body ทั้งก้อนถูกเซ็นเป็น opaque bytes อยู่แล้ว (verifyCeloxC2CCallbackSignatureV2)
+// ดังนั้น field ที่ไม่รู้จักไม่มีทางทำให้ลายเซ็นพัง — ห้าม reject request เพราะเจอ field แปลกปลอม
+// ที่นี่จึงตรวจแค่ว่า field ที่รู้จักมีรูปร่างถูกต้อง ไม่เช็คว่ามี field อื่นปนมาหรือไม่
 const TRANSFER_TO_KEYS = ["bankCode", "bankName", "accountName", "accountNo"] as const;
-const PART_KEYS = new Set(["transactionId", "orderId", "amount", "status"]);
 const EVENT_NAMES = new Set<CeloxC2CCallbackEventName>([
   "matched",
   "settled",
@@ -92,7 +82,6 @@ function isNonNegativeCentAmount(value: unknown): value is number {
 
 function isC2CCallbackPart(value: unknown): value is C2CCallbackPart {
   if (!isRecord(value)) return false;
-  if (Object.keys(value).some((key) => !PART_KEYS.has(key))) return false;
   return typeof value.transactionId === "string"
     && UUID_PATTERN.test(value.transactionId)
     && isBoundedText(value.orderId, 200)
@@ -104,9 +93,6 @@ function isC2CCallbackPart(value: unknown): value is C2CCallbackPart {
 
 function isTransferTo(value: unknown): value is C2CTransferTo {
   if (!isRecord(value)) return false;
-  if (Object.keys(value).some((key) => !TRANSFER_TO_KEYS.includes(key as typeof TRANSFER_TO_KEYS[number]))) {
-    return false;
-  }
   return TRANSFER_TO_KEYS.every((key) => Object.hasOwn(value, key))
     && isNullableBoundedText(value.bankCode, 20)
     && isNullableBoundedText(value.bankName, 200)
@@ -116,7 +102,6 @@ function isTransferTo(value: unknown): value is C2CTransferTo {
 
 export function isCeloxC2CCallbackRequest(value: unknown): value is CeloxC2CCallbackRequest {
   if (!isRecord(value)) return false;
-  if (Object.keys(value).some((key) => !CALLBACK_KEYS.has(key))) return false;
   if (!Object.hasOwn(value, "referenceId") || !Object.hasOwn(value, "occurredAt")) return false;
   if (!Object.hasOwn(value, "parts")) return false;
 
@@ -128,6 +113,10 @@ export function isCeloxC2CCallbackRequest(value: unknown): value is CeloxC2CCall
     && value.parts.every(isC2CCallbackPart);
   const validUnfilledAmount = !Object.hasOwn(value, "unfilledAmount")
     || isNonNegativeCentAmount(value.unfilledAmount);
+  const validSettledTotal = !Object.hasOwn(value, "settledTotal")
+    || isNonNegativeCentAmount(value.settledTotal);
+  const validUnfilledTotal = !Object.hasOwn(value, "unfilledTotal")
+    || isNonNegativeCentAmount(value.unfilledTotal);
 
   return typeof value.transactionId === "string"
     && UUID_PATTERN.test(value.transactionId)
@@ -141,5 +130,7 @@ export function isCeloxC2CCallbackRequest(value: unknown): value is CeloxC2CCall
     && validEvent
     && validTransferTo
     && validParts
-    && validUnfilledAmount;
+    && validUnfilledAmount
+    && validSettledTotal
+    && validUnfilledTotal;
 }
