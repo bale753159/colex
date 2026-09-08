@@ -18,11 +18,25 @@ function errorResponse(status: number, error: string, code: string) {
   });
 }
 
+/**
+ * แยก callback C2C ออกจาก callback ปกติบน endpoint กลาง `/api/celox/callback`
+ *
+ * `parts` เป็นตัวชี้ขาด เพราะสเปคระบุว่ามีอยู่ในทุก callback C2C เสมอทั้งฝั่งฝากและถอน
+ * (แม้รายการไม่เคยถูก split ก็ยังได้ array หนึ่งสมาชิก) ส่วน callback ปกติมีแค่หก field
+ * (`CeloxCallbackRequest`) ไม่มี `parts` เลย
+ *
+ * เดิมดูแค่ `event`/`transferTo` ซึ่งพลาดของจริง: `event` เป็น conditional ตามสเปค และ
+ * `transferTo` มีเฉพาะฝั่งฝากที่ยังโอนได้ ทำให้ callback ถอน C2C สถานะ PENDING_MANUAL_C2C
+ * ที่ยังไม่จับคู่ (ไม่มีทั้งสอง field) ตกไปเข้า verifier ของ callback ปกติ ซึ่งเซ็น raw body
+ * เปล่าๆ ไม่มี material "v2\n<timestamp>\n<bodyHash>" จึงถูกปฏิเสธด้วย 401 ทุกครั้ง
+ */
 export function looksLikeCeloxC2CCallback(value: unknown) {
   return typeof value === "object"
     && value !== null
     && !Array.isArray(value)
-    && (Object.hasOwn(value, "event") || Object.hasOwn(value, "transferTo"));
+    && (Array.isArray((value as Record<string, unknown>).parts)
+      || Object.hasOwn(value, "event")
+      || Object.hasOwn(value, "transferTo"));
 }
 
 export async function acceptCeloxC2CCallbackPayload(
