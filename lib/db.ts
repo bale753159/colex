@@ -1672,15 +1672,21 @@ function sameInstant(stored: string | null, incoming: string | null) {
   return storedTime === incomingTime;
 }
 
+// สถานะที่ไม่ terminal (PENDING_TRANSFER, PENDING_MANUAL_C2C, ...) คือภาพรวมของกลุ่มที่ยัง
+// เปลี่ยนแปลงได้ (parts จับคู่/ถูกยกเลิกเพิ่มระหว่างทาง) Celox ยิง status เดิมซ้ำได้จริงโดย
+// amount/occurredAt ต่างจากเดิม (ดู comment เดียวกันใน processCeloxC2CCallbackEvent ตรง
+// "amount ไม่ใช่ identity field") — ต้องไม่ถือว่านี่คือ conflict เหมือนกับ terminal status
+// ที่ต้องเป็น final ตายตัว มิเช่นนั้น callback ที่ update สถานะจริงจะโดนปฏิเสธด้วย 409 ตลอดไป
 function c2cCallbackPayloadMatches(
   row: CeloxC2CCallbackRow,
   input: CeloxC2CCallbackRequest,
   amountSatang: number,
   signedPayloadHash: string,
 ) {
-  return row.order_id === input.orderId
-    && row.reference_id === input.referenceId
-    && row.amount_satang === amountSatang
+  const sameIdentity = row.order_id === input.orderId && row.reference_id === input.referenceId;
+  if (!sameIdentity) return false;
+  if (!isC2CTerminalStatus(input.status)) return true;
+  return row.amount_satang === amountSatang
     && sameInstant(row.occurred_at, input.occurredAt)
     && row.signed_payload_hash === signedPayloadHash;
 }
@@ -1735,11 +1741,15 @@ export async function enqueueCeloxC2CCallbackEvent(
       UPDATE celox_c2c_callback_events
       SET received_count = received_count + 1,
           last_received_at = ?,
+          amount_satang = ?,
+          occurred_at = ?,
+          provider_event = ?,
+          signed_payload_hash = ?,
           processing_state = CASE WHEN processing_state IN ('failed', 'unmatched') THEN 'pending' ELSE processing_state END,
           last_error = CASE WHEN processing_state IN ('failed', 'unmatched') THEN NULL ELSE last_error END,
           processed_at = CASE WHEN processing_state IN ('failed', 'unmatched') THEN NULL ELSE processed_at END
       WHERE id = ?
-    `, [now, event.id]);
+    `, [now, amountSatang, input.occurredAt, input.event ?? null, signedPayloadHash, event.id]);
     return { eventId: event.id, duplicate: true, conflict: false, shouldProcess };
   });
 }
