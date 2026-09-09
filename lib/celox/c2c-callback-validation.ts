@@ -1,25 +1,19 @@
 import type {
-  C2CCallbackPart,
-  CeloxC2CCallbackEventName,
-  CeloxC2CCallbackRequest,
+  C2CTransactionPart,
+  C2CTransactionResponse,
   C2CTransferTo,
 } from "./types";
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// ยอมรับ UUID ทุกเวอร์ชัน/variant ที่ Celox ออกให้ (ของจริงเป็น v7 ตามตัวอย่างในคู่มือ)
+// ความเข้มงวดของรูปร่าง id ไม่ใช่ชั้นความปลอดภัย — ลายเซ็น v2 เป็นตัวยืนยันตัวตน
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STATUS_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:Z|([+-])(\d{2}):(\d{2}))$/;
 // raw body ทั้งก้อนถูกเซ็นเป็น opaque bytes อยู่แล้ว (verifyCeloxC2CCallbackSignatureV2)
 // ดังนั้น field ที่ไม่รู้จักไม่มีทางทำให้ลายเซ็นพัง — ห้าม reject request เพราะเจอ field แปลกปลอม
 // ที่นี่จึงตรวจแค่ว่า field ที่รู้จักมีรูปร่างถูกต้อง ไม่เช็คว่ามี field อื่นปนมาหรือไม่
+// (`occurredAt`/`event` ที่ contract ใหม่ถอดออกก็ผ่านทางนี้ ถ้ายังหลุดมาก็เป็นแค่ field ที่ไม่ได้ใช้)
 const TRANSFER_TO_KEYS = ["bankCode", "bankName", "accountName", "accountNo"] as const;
-const EVENT_NAMES = new Set<CeloxC2CCallbackEventName>([
-  "matched",
-  "settled",
-  "parked",
-  "expired",
-  "cancelled",
-  "failed",
-]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -64,6 +58,10 @@ function isIsoDate(value: unknown): value is string {
     && Number.isFinite(Date.parse(value));
 }
 
+function isNullableIsoDate(value: unknown) {
+  return value === null || isIsoDate(value);
+}
+
 function isPositiveCentAmount(value: unknown): value is number {
   return typeof value === "number"
     && Number.isFinite(value)
@@ -80,15 +78,25 @@ function isNonNegativeCentAmount(value: unknown): value is number {
     && Math.abs((value * 100) - Math.round(value * 100)) <= 1e-8;
 }
 
-function isC2CCallbackPart(value: unknown): value is C2CCallbackPart {
+function isStatus(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length <= 64
+    && STATUS_PATTERN.test(value);
+}
+
+/**
+ * หนึ่งก้อนย่อยของคำขอ — contract ใหม่ถอด `transactionId` ระดับก้อนออก (ยกเลิก/สอบถาม
+ * ใช้ id ของทั้งคำขอเสมอ) และเปลี่ยน `status` เป็น `transactionStatus`
+ */
+function isC2CTransactionPart(value: unknown): value is C2CTransactionPart {
   if (!isRecord(value)) return false;
-  return typeof value.transactionId === "string"
-    && UUID_PATTERN.test(value.transactionId)
-    && isBoundedText(value.orderId, 200)
+  return isBoundedText(value.orderId, 200)
     && isPositiveCentAmount(value.amount)
-    && typeof value.status === "string"
-    && value.status.length <= 64
-    && STATUS_PATTERN.test(value.status);
+    && isNonNegativeCentAmount(value.feeAmount)
+    && isStatus(value.transactionStatus)
+    && isNullableIsoDate(value.matchDeadline)
+    && isNullableIsoDate(value.matchedAt)
+    && isNullableBoundedText(value.cancelReason, 500);
 }
 
 function isTransferTo(value: unknown): value is C2CTransferTo {
@@ -100,37 +108,48 @@ function isTransferTo(value: unknown): value is C2CTransferTo {
     && isNullableBoundedText(value.accountNo, 30);
 }
 
-export function isCeloxC2CCallbackRequest(value: unknown): value is CeloxC2CCallbackRequest {
+/**
+ * validator ตัวเดียวสำหรับทั้ง body ของ GET /v1/core/c2c/{reference} และ body ของ
+ * Callback C2C — Celox ยืนยันว่าสองอย่างนี้เหมือนกัน field ต่อ field
+ */
+export function isC2CTransactionResponse(value: unknown): value is C2CTransactionResponse {
   if (!isRecord(value)) return false;
-  if (!Object.hasOwn(value, "referenceId") || !Object.hasOwn(value, "occurredAt")) return false;
+  // field ที่คู่มือระบุว่า "present, may be null" ต้องมีคีย์เสมอ ห้ามหายไปทั้งคีย์
+  if (!Object.hasOwn(value, "referenceId")) return false;
+  if (!Object.hasOwn(value, "unfilledAmount")) return false;
+  if (!Object.hasOwn(value, "matchDeadline")) return false;
   if (!Object.hasOwn(value, "parts")) return false;
 
-  const validEvent = !Object.hasOwn(value, "event")
-    || (typeof value.event === "string" && EVENT_NAMES.has(value.event as CeloxC2CCallbackEventName));
-  const validTransferTo = !Object.hasOwn(value, "transferTo") || isTransferTo(value.transferTo);
+  const isWithdraw = value.direction === "withdraw";
+  // ฝั่งถอนตอบ null ไม่ได้ (0 คือ "ไม่มีอะไรต้องคืน") ฝั่งฝากตอบตัวเลขไม่ได้
+  const validUnfilledAmount = isWithdraw
+    ? isNonNegativeCentAmount(value.unfilledAmount)
+    : value.unfilledAmount === null;
+  // transferTo เป็น conditional field: ฝั่งฝากที่ยังโอนได้เท่านั้นที่มี object จริง
+  // ฝั่งถอนต้องเป็น null เสมอ และคีย์อาจไม่ถูกส่งมาเลยก็ได้
+  const validTransferTo = !Object.hasOwn(value, "transferTo")
+    || value.transferTo === null
+    || (!isWithdraw && isTransferTo(value.transferTo));
   const validParts = Array.isArray(value.parts)
     && value.parts.length > 0
-    && value.parts.every(isC2CCallbackPart);
-  const validUnfilledAmount = !Object.hasOwn(value, "unfilledAmount")
-    || isNonNegativeCentAmount(value.unfilledAmount);
-  const validSettledTotal = !Object.hasOwn(value, "settledTotal")
-    || isNonNegativeCentAmount(value.settledTotal);
-  const validUnfilledTotal = !Object.hasOwn(value, "unfilledTotal")
-    || isNonNegativeCentAmount(value.unfilledTotal);
+    && value.parts.every(isC2CTransactionPart);
 
   return typeof value.transactionId === "string"
     && UUID_PATTERN.test(value.transactionId)
     && isBoundedText(value.orderId, 200)
-    && (value.referenceId === null || isBoundedText(value.referenceId, 200))
-    && typeof value.status === "string"
-    && value.status.length <= 64
-    && STATUS_PATTERN.test(value.status)
+    && isNullableBoundedText(value.referenceId, 200)
+    && (value.direction === "deposit" || isWithdraw)
+    && isStatus(value.transactionStatus)
     && isPositiveCentAmount(value.amount)
-    && (value.occurredAt === null || isIsoDate(value.occurredAt))
-    && validEvent
-    && validTransferTo
-    && validParts
+    && isNonNegativeCentAmount(value.feeAmount)
+    && isNonNegativeCentAmount(value.realWithdrawAmount)
+    && isNonNegativeCentAmount(value.heldAmount)
     && validUnfilledAmount
-    && validSettledTotal
-    && validUnfilledTotal;
+    && typeof value.awaitingManualReview === "boolean"
+    && isNullableIsoDate(value.matchDeadline)
+    && validTransferTo
+    && validParts;
 }
+
+// body ของ callback เหมือน body ของ GET เป๊ะ จึงเป็นฟังก์ชันเดียวกันจริงๆ ไม่ใช่แค่ชื่อพ้อง
+export const isCeloxC2CCallbackRequest = isC2CTransactionResponse;

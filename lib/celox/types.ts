@@ -161,21 +161,42 @@ export type C2CTransactionPart = {
   cancelReason: string | null;
 };
 
+/**
+ * body ของ GET /v1/core/c2c/{reference} — และเป็น body ของ Callback C2C แบบ field
+ * ต่อ field เหมือนกันเป๊ะ (ดู `CeloxC2CCallbackRequest` ใต้ไฟล์นี้ ซึ่ง alias มาที่ type นี้)
+ */
 export type C2CTransactionResponse = {
   transactionId: string;
   orderId: string;
   referenceId: string | null;
   direction: "deposit" | "withdraw";
+  // สถานะรวมของ 'ทั้งคำขอ' แบบ roll-up (ส่วนที่ต้องการความสนใจมากที่สุดชนะ ไม่ใช่ค่าเฉลี่ย)
+  // เป็น SUCCESS ได้ทั้งที่บางก้อนยังวิ่งอยู่ — ห้ามตัดเงินจากค่านี้ ให้ดู parts[].transactionStatus
   transactionStatus: C2CTransactionStatus;
+  // ยอดตั้งต้นที่ลูกค้าขอ "เสมอ" ไม่ใช่ยอดที่จบจริง (ขอถอน 250 จบจริง 190 ก็ยังตอบ 250)
+  // เดิม Celox เขียนทับค่านี้เป็นยอดที่จบจริงเมื่อคู่โอนมาไม่ครบ — เลิกทำแล้ว
   amount: number;
   feeAmount: number;
-  settledAmount: number;
+  // ยอดที่ถอนสำเร็จจริง = ผลรวมของก้อนที่สถานะ SUCCESS · นี่คือ field ที่ใช้ตัดเงินฝั่งถอน
+  // เปลี่ยนชื่อมาจาก settledAmount ซึ่งไม่มีอยู่แล้ว (breaking)
+  realWithdrawAmount: number;
+  // ฝั่งถอนนับเฉพาะค่าธรรมเนียม (เงินต้น C2C ไม่ผ่านกระเป๋าปฏิบัติการ) ฝั่งฝากนับเงินต้น+ค่าธรรมเนียม
   heldAmount: number;
-  // ฝั่งถอน: ยอดที่ยังขาดอยู่ (0 เมื่อไม่มีส่วนไหนขาด) · ฝั่งฝากเป็น null เสมอ
+  // ฝั่งถอน: ยอดที่ถอนไม่สำเร็จและต้องคืนลูกค้า นับ "ทุกบาท" ที่ไม่สำเร็จ รวมก้อนที่ถูกยกเลิก
+  // หรือหมดเวลาเต็มยอด (เดิมนับเฉพาะส่วนที่ขาดตอนคู่โอนมาไม่ครบ จึงตอบ 0 ในเคสพวกนั้น)
+  // เป็น 0 เมื่อไม่มีอะไรต้องคืน ไม่ใช่ null · ฝั่งฝากเป็น null เสมอ
+  // realWithdrawAmount + unfilledAmount = amount เมื่อทุกก้อนของคำขอจบแล้ว
   unfilledAmount: number | null;
+  // true เมื่อมีก้อนใดค้างรอเจ้าหน้าที่โดยไม่มีนาฬิกาปลดเอง (PENDING_REFUND_C2C / PENDING_REVIEW)
+  // PENDING_MANUAL_C2C ถูกถอดออกจากเงื่อนไขนี้แล้ว — คิวถูกจับคู่ด้วยเครื่องเองทุกไม่กี่วินาที
+  // PENDING_TOPUP_C2C ไม่นับ เพราะยังเดินนาฬิกาเดิมและปิดเองได้ด้วยการโอนส่วนที่ขาด
   awaitingManualReview: boolean;
   matchDeadline: string | null;
+  // เฉพาะฝั่งฝากที่ยังโอนได้ · ฝั่งถอนเป็น null เสมอ
   transferTo: C2CTransferTo | null;
+  // เป็น array เสมอทั้งฝั่งฝากและถอน (ไม่ split ก็ได้ array หนึ่งสมาชิก ไม่ใช่ object เดี่ยว)
+  // เป็นที่เดียวที่บอกว่าแต่ละก้อนสำเร็จหรือไม่ — เวลากระทบยอดให้เทียบผลรวม parts กับ
+  // realWithdrawAmount ไม่ใช่กับ amount
   parts: [C2CTransactionPart, ...C2CTransactionPart[]];
 };
 
@@ -211,8 +232,10 @@ export type CeloxC2CListItem = {
   transactionStatus: C2CTransactionStatus;
   amount: number;
   feeAmount: number;
-  settledAmount: number;
+  realWithdrawAmount: number;
   heldAmount: number;
+  // ฝั่งถอน: ยอดที่ต้องคืนลูกค้า · ฝั่งฝากและรายการที่ยังไม่จบเป็น null
+  unfilledAmount: number | null;
   awaitingManualReview: boolean;
   matchDeadline: string | null;
   createdAt: string;
@@ -270,39 +293,16 @@ export type CeloxCallbackResponse = {
   duplicate: boolean;
 };
 
-export type CeloxC2CCallbackEventName =
-  | "matched"
-  | "settled"
-  | "parked"
-  | "expired"
-  | "cancelled"
-  | "failed";
-
-export type C2CCallbackPart = {
-  transactionId: string;
-  orderId: string;
-  amount: number;
-  status: string;
-};
-
-export type CeloxC2CCallbackRequest = {
-  transactionId: string;
-  orderId: string;
-  referenceId: string | null;
-  status: C2CTransactionStatus;
-  amount: number;
-  occurredAt: string | null;
-  event?: CeloxC2CCallbackEventName;
-  transferTo?: C2CTransferTo;
-  // ทุก callback ของ C2C มีเสมอ (แม้รายการไม่เคยถูกแบ่ง ก็ยังเป็น array หนึ่งสมาชิก)
-  parts: [C2CCallbackPart, ...C2CCallbackPart[]];
-  // มีเฉพาะ callback ฝั่งถอน C2C — เป็น 0 เมื่อคู่ปิดเต็มยอด
-  unfilledAmount?: number;
-  // เฉพาะ callback ถอน C2C ที่ทำให้ทั้งกลุ่มจบ (terminal) เท่านั้น — ผลรวมยอดของทุกพาร์ทที่ SUCCESS
-  settledTotal?: number;
-  // เฉพาะ callback ถอน C2C ที่ทำให้ทั้งกลุ่มจบ (terminal) เท่านั้น — ผลรวมยอดที่ยังไม่สำเร็จของทุกพาร์ท
-  unfilledTotal?: number;
-};
+/**
+ * body ของ Callback C2C เหมือน body ของ GET /v1/core/c2c/{reference} แบบ field ต่อ field
+ * ทุกตัว จึงประกาศเป็น type เดียวกันและใช้ validator ตัวเดียวกันทั้งสองทาง
+ *
+ * BREAKING จาก contract เดิม: `status` → `transactionStatus` (ทั้งหัว body และใน parts[]),
+ * `parts[]` ไม่มี `transactionId` แล้ว, `settledTotal`/`unfilledTotal` หายไปโดยมี
+ * `realWithdrawAmount` มาแทนซึ่งส่งมาทุกครั้งที่ยิงไม่ใช่แค่ครั้งสุดท้ายของกลุ่ม,
+ * และ contract ใหม่ไม่มี `occurredAt`/`event` อีกต่อไป
+ */
+export type CeloxC2CCallbackRequest = C2CTransactionResponse;
 
 // Celox ignores the acknowledgement body, but keeping it typed makes the
 // webhook contract observable in local tests and ngrok inspection.

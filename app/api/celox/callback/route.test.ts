@@ -24,14 +24,25 @@ function withdrawalCallback(overrides: Partial<CeloxC2CCallbackRequest> = {}): C
     transactionId: randomUUID(),
     orderId: "TXN-2608-00993",
     referenceId: "ORDER-4471",
-    status: "SUCCESS",
+    direction: "withdraw",
+    transactionStatus: "SUCCESS",
     amount: 2500,
-    occurredAt: "2026-08-30T10:05:12.000Z",
-    event: "settled",
-    parts: [
-      { transactionId: randomUUID(), orderId: "TXN-2608-00993", amount: 2500, status: "SUCCESS" },
-    ],
+    feeAmount: 37.5,
+    realWithdrawAmount: 2500,
+    heldAmount: 0,
     unfilledAmount: 0,
+    awaitingManualReview: false,
+    matchDeadline: null,
+    transferTo: null,
+    parts: [{
+      orderId: "TXN-2608-00993-1",
+      amount: 2500,
+      feeAmount: 37.5,
+      transactionStatus: "SUCCESS",
+      matchDeadline: null,
+      matchedAt: "2026-08-30T10:05:12.000Z",
+      cancelReason: null,
+    }],
     ...overrides,
   };
 }
@@ -54,7 +65,7 @@ afterAll(async () => {
 });
 
 describe("POST /api/celox/callback — dispatch to the C2C handler", () => {
-  it("ยอมรับ payload ที่มีรูปร่างเป็น C2C (มี event/transferTo) เมื่อเซ็นด้วย v2 ถูกต้อง", async () => {
+  it("ยอมรับ payload ที่มีรูปร่างเป็น C2C (มี parts) เมื่อเซ็นด้วย v2 ถูกต้อง", async () => {
     const payload = withdrawalCallback();
     const body = JSON.stringify(payload);
     const timestamp = currentTimestamp();
@@ -73,20 +84,34 @@ describe("POST /api/celox/callback — dispatch to the C2C handler", () => {
     expect(await response.json()).toEqual({ received: true, duplicate: false });
   });
 
-  it("ยอมรับ callback C2C ฝั่งถอนที่ไม่มีทั้ง event และ transferTo (แยกด้วย parts ที่มีเสมอ)", async () => {
-    // payload จริงจาก production ที่โดน 401: PENDING_MANUAL_C2C ฝั่งถอนที่ยังไม่จับคู่
-    // ไม่มี event (สเปคระบุว่า conditional) และไม่มี transferTo (มีแต่ฝั่งฝาก)
-    // เหลือ parts เป็นตัวเดียวที่ยืนยันว่าเป็น callback C2C — สเปคระบุว่ามีเสมอทุก callback C2C
+  it("ยอมรับ callback C2C ฝั่งถอนที่ไม่มี transferTo และไม่มี event (แยกด้วย parts ที่มีเสมอ)", async () => {
+    // payload แบบที่เคยโดน 401: PENDING_MANUAL_C2C ฝั่งถอนที่ยังไม่จับคู่ ไม่มี transferTo
+    // (มีแต่ฝั่งฝาก) และ contract ใหม่ก็ถอด event ออกไปแล้ว เหลือ parts เป็นตัวเดียวที่
+    // ยืนยันว่าเป็น callback C2C — สเปคระบุว่ามีเสมอทุก callback C2C
     const transactionId = randomUUID();
     const body = JSON.stringify({
       transactionId,
       orderId: "WTH-C2C-1788870009481-09yQq",
       referenceId: "KLANG-C2C-WD-MTSN0EOX",
-      status: "PENDING_MANUAL_C2C",
+      direction: "withdraw",
+      transactionStatus: "PENDING_MANUAL_C2C",
       amount: 500,
-      occurredAt: "2026-09-08T12:20:09.467Z",
-      parts: [{ transactionId, orderId: "WTH-C2C-1788870009481-09yQq", amount: 500, status: "PENDING_MANUAL_C2C" }],
+      feeAmount: 7.5,
+      realWithdrawAmount: 0,
+      heldAmount: 7.5,
       unfilledAmount: 0,
+      awaitingManualReview: false,
+      matchDeadline: null,
+      transferTo: null,
+      parts: [{
+        orderId: "WTH-C2C-1788870009481-09yQq",
+        amount: 500,
+        feeAmount: 7.5,
+        transactionStatus: "PENDING_MANUAL_C2C",
+        matchDeadline: null,
+        matchedAt: null,
+        cancelReason: null,
+      }],
     });
     const timestamp = currentTimestamp();
     const request = new Request(CALLBACK_URL, {

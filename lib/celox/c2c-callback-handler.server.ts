@@ -25,18 +25,21 @@ function errorResponse(status: number, error: string, code: string) {
  * (แม้รายการไม่เคยถูก split ก็ยังได้ array หนึ่งสมาชิก) ส่วน callback ปกติมีแค่หก field
  * (`CeloxCallbackRequest`) ไม่มี `parts` เลย
  *
- * เดิมดูแค่ `event`/`transferTo` ซึ่งพลาดของจริง: `event` เป็น conditional ตามสเปค และ
- * `transferTo` มีเฉพาะฝั่งฝากที่ยังโอนได้ ทำให้ callback ถอน C2C สถานะ PENDING_MANUAL_C2C
- * ที่ยังไม่จับคู่ (ไม่มีทั้งสอง field) ตกไปเข้า verifier ของ callback ปกติ ซึ่งเซ็น raw body
- * เปล่าๆ ไม่มี material "v2\n<timestamp>\n<bodyHash>" จึงถูกปฏิเสธด้วย 401 ทุกครั้ง
+ * `transactionStatus` เป็นตัวชี้ขาดสำรอง: contract ใหม่เปลี่ยนชื่อ field สถานะของ C2C
+ * จาก `status` เป็น `transactionStatus` ส่วน callback ปกติยังใช้ `status` อยู่ จึงแยกกัน
+ * ได้ชัดแม้ `parts` จะผิดรูปมา
+ *
+ * ห้ามกลับไปดู `event`/`transferTo` แบบเดิม: contract ใหม่ถอด `event` ออกทั้ง field และ
+ * `transferTo` มีเฉพาะฝั่งฝากที่ยังโอนได้ ทำให้ callback ถอน C2C ที่ยังไม่จับคู่ (ไม่มีทั้งสอง
+ * field) ตกไปเข้า verifier ของ callback ปกติ ซึ่งไม่มี material "v2\n<timestamp>\n<bodyHash>"
+ * จึงถูกปฏิเสธด้วย 401 ทุกครั้ง
  */
 export function looksLikeCeloxC2CCallback(value: unknown) {
   return typeof value === "object"
     && value !== null
     && !Array.isArray(value)
     && (Array.isArray((value as Record<string, unknown>).parts)
-      || Object.hasOwn(value, "event")
-      || Object.hasOwn(value, "transferTo"));
+      || Object.hasOwn(value, "transactionStatus"));
 }
 
 export async function acceptCeloxC2CCallbackPayload(

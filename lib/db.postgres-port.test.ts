@@ -371,28 +371,31 @@ describe("lib/db.ts on Postgres", () => {
     expect(realConflict.shouldProcess).toBe(false);
   });
 
-  it("treats a redelivered C2C callback as a duplicate across ISO spellings", async () => {
+  // contract ใหม่ของ C2C ไม่มี field `occurredAt` แล้ว การกันซ้ำจึงอิงกุญแจ
+  // transactionId + transactionStatus กับ body hash เท่านั้น ไม่มีเวลามาเกี่ยวข้อง
+  it("treats a redelivered C2C callback with the identical body as a duplicate", async () => {
     const hash = "b".repeat(64);
-    const base: Omit<CeloxC2CCallbackRequest, "occurredAt"> = {
-      transactionId: "TX-C2C-ISO", orderId: "O-C2C-ISO", referenceId: "REF-C2C-ISO",
-      status: "SUCCESS", amount: 25,
-      parts: [{ transactionId: "TX-C2C-ISO", orderId: "O-C2C-ISO", amount: 25, status: "SUCCESS" }],
-      unfilledAmount: 0,
+    const base: CeloxC2CCallbackRequest = {
+      transactionId: "TX-C2C-DUP", orderId: "O-C2C-DUP", referenceId: "REF-C2C-DUP",
+      direction: "withdraw", transactionStatus: "SUCCESS", amount: 25, feeAmount: 0.38,
+      realWithdrawAmount: 25, heldAmount: 0, unfilledAmount: 0,
+      awaitingManualReview: false, matchDeadline: null, transferTo: null,
+      parts: [{
+        orderId: "O-C2C-DUP-1", amount: 25, feeAmount: 0.38, transactionStatus: "SUCCESS",
+        matchDeadline: null, matchedAt: "2026-08-30T10:05:12.000Z", cancelReason: null,
+      }],
     };
-    const first = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:12.000Z" }, hash);
+    const first = await mod.enqueueCeloxC2CCallbackEvent(base, hash);
     expect(first.duplicate).toBe(false);
     expect(first.conflict).toBe(false);
 
-    const offsetSpelling = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T17:05:12+07:00" }, hash);
-    expect(offsetSpelling.eventId).toBe(first.eventId);
-    expect(offsetSpelling.duplicate).toBe(true);
-    expect(offsetSpelling.conflict).toBe(false);
+    const redelivered = await mod.enqueueCeloxC2CCallbackEvent(base, hash);
+    expect(redelivered.eventId).toBe(first.eventId);
+    expect(redelivered.duplicate).toBe(true);
+    expect(redelivered.conflict).toBe(false);
 
-    const noMillis = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:12Z" }, hash);
-    expect(noMillis.duplicate).toBe(true);
-    expect(noMillis.conflict).toBe(false);
-
-    const realConflict = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:13.000Z" }, hash);
+    // สถานะ terminal เดิมที่มาพร้อม body ต่างออกไป ยังต้องเป็น conflict
+    const realConflict = await mod.enqueueCeloxC2CCallbackEvent(base, "c".repeat(64));
     expect(realConflict.conflict).toBe(true);
     expect(realConflict.shouldProcess).toBe(false);
   });
@@ -430,7 +433,7 @@ describe("lib/db.ts on Postgres", () => {
     await db.run(`
       INSERT INTO celox_c2c_transactions (
         transaction_id, order_id, reference_id, customer_id, direction,
-        transaction_status, amount_satang, fee_amount_satang, settled_amount_satang,
+        transaction_status, amount_satang, fee_amount_satang, real_withdraw_amount_satang,
         held_amount_satang, awaiting_manual_review, match_deadline, funds_reserved,
         local_transaction_id, created_at, updated_at
       ) VALUES ('TX-UP', 'ORD-UPPER', 'REF-UPPER', 'C-1', 'withdraw',

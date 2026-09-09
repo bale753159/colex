@@ -1,7 +1,13 @@
 # อัปเดต Celox C2C Callback Webhook เป็น Signature Scheme v2
 
 วันที่: 2026-09-08
-สถานะ: implement แล้ว เสร็จสมบูรณ์ ในรีโพนี้ (commit ยังไม่ได้ทำ — ผู้ใช้ยังไม่ได้สั่ง commit)
+สถานะ: **signature scheme v2 ยังใช้อยู่จริง แต่ส่วน body fields ของเอกสารนี้ตกยุคแล้ว**
+— contract ของ Celox เปลี่ยนอีกครั้งเมื่อ 2026-09-09: `status` → `transactionStatus`
+(ทั้งหัว body และใน `parts[]`), `settledAmount` → `realWithdrawAmount`, ถอด
+`settledTotal`/`unfilledTotal`/`occurredAt`/`event` ออก และ `amount` เป็นยอดตั้งต้นเสมอ
+จึงห้ามใช้ตัดเงิน (ดู `supabase/migrations/0004_c2c_real_withdraw_amount.sql` และ
+หัวข้อ "Callback C2C และ ngrok" ใน README.md เป็นแหล่งอ้างอิงล่าสุด)
+สถานะเดิม: implement แล้ว เสร็จสมบูรณ์ ในรีโพนี้ (commit ยังไม่ได้ทำ — ผู้ใช้ยังไม่ได้สั่ง commit)
 เอกสารนี้เขียนไว้ให้เครื่อง/เซสชันอื่นที่มีโค้ดเบสเดียวกันทำตามเพื่อรีพลิเคตงานชิ้นเดียวกัน
 
 ## เป้าหมาย

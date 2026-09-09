@@ -2,11 +2,11 @@ import "server-only";
 
 import { createHash, createHmac } from "node:crypto";
 import { CeloxError } from "./client.server";
+import { isC2CTransactionResponse } from "./c2c-callback-validation";
 import { isValidC2CUploadToken } from "./c2c-validation";
 import type {
   C2CAttachSlipOptions,
   C2CDepositSlipResponse,
-  C2CTransactionPart,
   C2CTransactionResponse,
   C2CTransactionStatus,
   C2CTransferTo,
@@ -465,38 +465,6 @@ function isCancelC2CResponse(value: unknown, transactionId: string): value is Ca
     && isNullableString(value.referenceId)
     && isC2CTransactionStatus(value.transactionStatus)
     && isNullableIsoDate(value.cancelledAt);
-}
-
-function isC2CPart(value: unknown): value is C2CTransactionPart {
-  return isRecord(value)
-    && isNonEmptyString(value.orderId)
-    && isMoney(value.amount)
-    && isMoney(value.feeAmount)
-    && isC2CTransactionStatus(value.transactionStatus)
-    && isNullableIsoDate(value.matchDeadline)
-    && isNullableIsoDate(value.matchedAt)
-    && isNullableString(value.cancelReason);
-}
-
-function isC2CTransactionResponse(value: unknown): value is C2CTransactionResponse {
-  return isRecord(value)
-    && UUID_PATTERN.test(String(value.transactionId))
-    && isNonEmptyString(value.orderId)
-    && isNullableString(value.referenceId)
-    && (value.direction === "deposit" || value.direction === "withdraw")
-    && isC2CTransactionStatus(value.transactionStatus)
-    && isMoney(value.amount)
-    && isMoney(value.feeAmount)
-    && isMoney(value.settledAmount)
-    && isMoney(value.heldAmount)
-    && (value.direction === "withdraw" ? isMoney(value.unfilledAmount) : value.unfilledAmount === null)
-    && typeof value.awaitingManualReview === "boolean"
-    && isNullableIsoDate(value.matchDeadline)
-    && (value.transferTo === null || isTransferTo(value.transferTo))
-    && Array.isArray(value.parts)
-    && value.parts.length > 0
-    && value.parts.every(isC2CPart)
-    && (value.direction !== "withdraw" || value.transferTo === null);
 }
 
 function isC2CDepositSlipResponse(

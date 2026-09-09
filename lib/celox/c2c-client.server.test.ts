@@ -12,7 +12,7 @@ function transactionFixture(overrides: Record<string, unknown> = {}) {
     transactionStatus: "PENDING_TRANSFER",
     amount: 1000,
     feeAmount: 15,
-    settledAmount: 0,
+    realWithdrawAmount: 0,
     heldAmount: 1015,
     awaitingManualReview: false,
     matchDeadline: null,
@@ -68,6 +68,49 @@ describe("checkC2CTransaction", () => {
 
   it("rejects a deposit transaction with a non-null unfilledAmount", async () => {
     stubFetchJson(transactionFixture({ direction: "deposit", unfilledAmount: 0 }));
+    await expect(checkC2CTransaction("TXN-2608-00994")).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("อ่าน realWithdrawAmount เป็นยอดที่ถอนสำเร็จจริง แยกจาก amount ที่เป็นยอดตั้งต้น", async () => {
+    stubFetchJson(transactionFixture({
+      transactionStatus: "SUCCESS",
+      amount: 250,
+      realWithdrawAmount: 190,
+      unfilledAmount: 60,
+      heldAmount: 0,
+      parts: [
+        {
+          orderId: "TXN-2608-00994-1", amount: 190, feeAmount: 2.85,
+          transactionStatus: "SUCCESS", matchDeadline: null,
+          matchedAt: "2026-08-31T10:00:00.000Z", cancelReason: null,
+        },
+        {
+          orderId: "TXN-2608-00994-2", amount: 60, feeAmount: 0.9,
+          transactionStatus: "CANCELLED", matchDeadline: null,
+          matchedAt: null, cancelReason: "หมดเวลาโอน",
+        },
+      ],
+    }));
+    const result = await checkC2CTransaction("TXN-2608-00994");
+    expect(result.amount).toBe(250);
+    expect(result.realWithdrawAmount).toBe(190);
+    expect(result.realWithdrawAmount + (result.unfilledAmount ?? 0)).toBe(result.amount);
+  });
+
+  it("ปฏิเสธ response ที่ยังใช้ชื่อ settledAmount เดิม (ไม่มี field นี้อีกแล้ว)", async () => {
+    const legacy: Record<string, unknown> = transactionFixture();
+    delete legacy.realWithdrawAmount;
+    stubFetchJson({ ...legacy, settledAmount: 0 });
+    await expect(checkC2CTransaction("TXN-2608-00994")).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("ปฏิเสธ response ที่ parts[] ยังใช้ชื่อ status เดิม", async () => {
+    stubFetchJson(transactionFixture({
+      parts: [{
+        orderId: "TXN-2608-00994", amount: 1000, feeAmount: 15,
+        status: "PENDING_TRANSFER", matchDeadline: null, matchedAt: null, cancelReason: null,
+      }],
+    }));
     await expect(checkC2CTransaction("TXN-2608-00994")).rejects.toMatchObject({ code: "invalid_response" });
   });
 });

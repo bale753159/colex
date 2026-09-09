@@ -332,7 +332,7 @@ curl --fail-with-body \
   "http://localhost:3000/api/celox/c2c/deposits/$TRANSACTION_ID/slip"
 ```
 
-ตรวจสถานะด้วย `orderId` หรือ `referenceId` และยกเลิกได้เฉพาะตอนยัง `PENDING`:
+ตรวจสถานะด้วย `orderId` หรือ `referenceId` และยกเลิกได้เฉพาะตอนยัง `PENDING` — เส้นนี้เป็นสถานะที่เชื่อถือได้ของ C2C ให้ poll เอาเอง เพราะ callback ยิงครั้งเดียวและไม่มีการยิงซ้ำ:
 
 ```bash
 REFERENCE_ID='ORDER-20260830-0001'
@@ -370,35 +370,46 @@ curl --fail-with-body \
 https://YOUR_NGROK_DOMAIN/api/celox/callback
 ```
 
-ระหว่างพัฒนาให้เปิดแอปที่ port 3000 แล้วรัน `ngrok http 3000` จากนั้นนำ HTTPS forwarding URL มาแทน `YOUR_NGROK_DOMAIN` route กลางจะแยก C2C จาก key `event`/`transferTo` แล้วส่งเข้า inbox C2C โดยไม่ปะปนกับ callback ปกติ หาก Console แยก URL สำหรับ C2C โดยเฉพาะก็ใช้ alias `https://YOUR_NGROK_DOMAIN/api/celox/c2c/callback` ได้ ตัว webhook จะทำงานดังนี้:
+ระหว่างพัฒนาให้เปิดแอปที่ port 3000 แล้วรัน `ngrok http 3000` จากนั้นนำ HTTPS forwarding URL มาแทน `YOUR_NGROK_DOMAIN` route กลางจะแยก C2C ด้วย `parts` (มีในทุก callback C2C เสมอ) หรือคีย์ `transactionStatus` แล้วส่งเข้า inbox C2C โดยไม่ปะปนกับ callback ปกติที่ยังใช้ `status` หาก Console แยก URL สำหรับ C2C โดยเฉพาะก็ใช้ alias `https://YOUR_NGROK_DOMAIN/api/celox/c2c/callback` ได้ ตัว webhook จะทำงานดังนี้:
 
-1. อ่าน JSON แบบจำกัดขนาดและตรวจ required/nullable fields
-2. สร้าง canonical JSON จากหก field ที่ถูกเซ็นตามลำดับ `transactionId`, `orderId`, `referenceId`, `status`, `amount`, `occurredAt` โดยไม่รวม `event`; ถ้ามี key `transferTo` จึงต่อ object นี้ท้ายสุด
-3. ตรวจ `X-Celox-Signature` ด้วย HMAC-SHA256 และ `CELOX_C2C_CALLBACK_SECRET` ซึ่ง fallback ไป `CELOX_CALLBACK_SECRET` หรือ `CELOX_CLIENT_SECRET`
-4. commit ลง durable inbox `celox_c2c_callback_events` ด้วย idempotency key `(transactionId, status)` ก่อนตอบ HTTP 200
-5. ประมวลผล ledger หลัง response ผ่าน `after()`: `PENDING_TRANSFER` อัปเดตสถานะ, `SUCCESS` ปิดยอด exact-once, `EXPIRED`/`CANCELLED` ปิดรายการและคืนยอดถอนที่พักไว้
+1. อ่าน raw body เป็น bytes แบบจำกัดขนาด **ก่อน** `JSON.parse` เสมอ (verify ก่อน parse ทีหลัง)
+2. `bodyHash = sha256hex(raw body)` แล้วประกอบ material `"v2\n" + X-Celox-Timestamp + "\n" + bodyHash`
+3. ตรวจ `X-Celox-Signature` = HMAC-SHA256 ของ material ด้วย `CELOX_C2C_CALLBACK_SECRET` (fallback ไป `CELOX_CALLBACK_SECRET` หรือ `CELOX_CLIENT_SECRET`) เทียบแบบ constant-time และปฏิเสธถ้า `X-Celox-Timestamp` ห่างจากนาฬิกาเราเกิน 300 วินาทีทั้งสองทิศทาง
+4. ตรวจรูปร่างของ field ที่รู้จัก โดยไม่ปฏิเสธ body ที่มี field ใหม่ที่ยังไม่รู้จัก (raw body ถูก hash ทั้งก้อน field ใหม่จึงไม่ทำให้ลายเซ็นพัง)
+5. commit ลง durable inbox `celox_c2c_callback_events` ด้วย idempotency key `(transactionId, transactionStatus)` ก่อนตอบ HTTP 200
+6. ประมวลผล ledger หลัง response ผ่าน `after()`: ตัดเงินเฉพาะเมื่อ **ทุกก้อนใน `parts` จบแล้ว** โดยฝั่งถอนหักจาก `realWithdrawAmount` และคืน `unfilledAmount` ฝั่งฝากเครดิตจาก `amount` ของคำขอ ส่วนการยิงระหว่างทางเป็นการบันทึกสถานะล้วนๆ
 
-`event` ใช้เก็บประกอบการตรวจสอบเท่านั้น การตัดสินใจทุกเส้นทางยึด `status` ข้อมูล `transferTo` ไม่ถูกเก็บลง Postgres หรือ log; inbox เก็บเฉพาะ SHA-256 ของ canonical signed payload เพื่อจับ payload conflict โดยไม่เปิดเผยบัญชีบุคคลที่สาม
+จุดที่เปลี่ยนจาก contract เดิม (breaking): field สถานะคือ `transactionStatus` ทั้งหัว body และใน `parts[]` ไม่ใช่ `status` อีกแล้ว, `settledAmount` เปลี่ยนชื่อเป็น `realWithdrawAmount`, `settledTotal`/`unfilledTotal` และ `occurredAt`/`event` ถูกถอดออก และ `amount` เป็นยอดตั้งต้นที่ลูกค้าขอเสมอ (ขอถอน 250 จบจริง 190 ก็ยังตอบ 250) จึงห้ามใช้ตัดเงิน
+
+`transactionStatus` ที่หัว body เป็น roll-up ของ **ทั้งคำขอ** (ส่วนที่ต้องการความสนใจมากที่สุดชนะ) เป็น `SUCCESS` ได้ทั้งที่ยังมีก้อนวิ่งอยู่ ระบบจึงไม่เขียนสถานะ terminal ลงแถวจนกว่าทุกก้อนจะจบ ข้อมูล `transferTo` ไม่ถูกเก็บลง Postgres หรือ log; inbox เก็บเฉพาะ SHA-256 ของ raw body เพื่อจับ payload conflict โดยไม่เปิดเผยบัญชีบุคคลที่สาม
 
 ตัวอย่าง Callback ที่รันได้เมื่อ dev server เปิดอยู่ (เปลี่ยน ID ให้ตรงกับรายการ C2C จริงหากต้องการให้ ledger ถูกอัปเดต):
+
+ตัวอย่างนี้เป็นคำขอถอน 250 ที่ถูกแบ่งเป็น 100/100/50 แล้วสำเร็จก้อนเดียว — ต้องหักลูกค้า 100 (`realWithdrawAmount`) และคืน 150 (`unfilledAmount`) ไม่ใช่หัก 250 ตาม `amount`:
 
 ```bash
 export CELOX_C2C_CALLBACK_SECRET='your-plaintext-client-secret'
 
-SIGNED_C2C_BODY='{"transactionId":"018f2e2a-0000-7000-8000-000000000010","orderId":"DEP-C2C-20260830-0001","referenceId":"ORDER-20260830-0001","status":"PENDING_TRANSFER","amount":5000,"occurredAt":null,"transferTo":{"bankCode":"014","bankName":"ธนาคารกสิกรไทย","accountName":"Wipada Chaiyo","accountNo":"1234567890"}}'
-C2C_CALLBACK_BODY='{"transactionId":"018f2e2a-0000-7000-8000-000000000010","orderId":"DEP-C2C-20260830-0001","referenceId":"ORDER-20260830-0001","status":"PENDING_TRANSFER","amount":5000,"occurredAt":null,"event":"matched","transferTo":{"bankCode":"014","bankName":"ธนาคารกสิกรไทย","accountName":"Wipada Chaiyo","accountNo":"1234567890"}}'
-C2C_SIGNATURE="$(printf '%s' "$SIGNED_C2C_BODY" | openssl dgst -sha256 -hmac "$CELOX_C2C_CALLBACK_SECRET" -binary | xxd -p -c 256)"
+C2C_CALLBACK_BODY='{"transactionId":"018f2e2a-0000-7000-8000-000000000010","orderId":"TXN-2608-00994","referenceId":"PAYOUT-20260830-0001","direction":"withdraw","transactionStatus":"SUCCESS","amount":250,"feeAmount":3.75,"realWithdrawAmount":100,"heldAmount":0,"unfilledAmount":150,"awaitingManualReview":false,"matchDeadline":null,"transferTo":null,"parts":[{"orderId":"TXN-2608-00994-1","amount":100,"feeAmount":1.5,"transactionStatus":"SUCCESS","matchDeadline":null,"matchedAt":"2026-08-31T10:15:00.000Z","cancelReason":null},{"orderId":"TXN-2608-00994-2","amount":100,"feeAmount":1.5,"transactionStatus":"CANCELLED","matchDeadline":null,"matchedAt":null,"cancelReason":"หมดเวลาโอน"},{"orderId":"TXN-2608-00994-3","amount":50,"feeAmount":0.75,"transactionStatus":"CANCELLED","matchDeadline":null,"matchedAt":null,"cancelReason":"ผู้ใช้ยกเลิก"}]}'
+C2C_TIMESTAMP="$(date +%s)"
+C2C_BODY_HASH="$(printf '%s' "$C2C_CALLBACK_BODY" | openssl dgst -sha256 -binary | xxd -p -c 256)"
+C2C_SIGNATURE="$(printf 'v2\n%s\n%s' "$C2C_TIMESTAMP" "$C2C_BODY_HASH" | openssl dgst -sha256 -hmac "$CELOX_C2C_CALLBACK_SECRET" -binary | xxd -p -c 256)"
 
 curl --fail-with-body \
   --request POST http://localhost:3000/api/celox/callback \
   --header 'Content-Type: application/json' \
+  --header "X-Celox-Timestamp: $C2C_TIMESTAMP" \
   --header "X-Celox-Signature: $C2C_SIGNATURE" \
   --data-binary "$C2C_CALLBACK_BODY"
 ```
 
-Response คือ `{ "received": true, "duplicate": false }`; เมื่อส่ง signed payload เดิมซ้ำจะได้ `duplicate: true` และไม่มีการปรับยอดซ้ำ
+ต้องส่ง `--data-binary` กับ string เดิมเป๊ะที่ใช้คำนวณ hash: re-serialise JSON ใหม่ (key order/ช่องว่าง/รูปแบบเลขเปลี่ยน) จะทำให้ลายเซ็นของจริงไม่ผ่าน
 
-Callback C2C ไม่มี retry จาก Celox ระบบจึงตอบ 200 หลัง commit inbox เท่านั้น งานหลัง response retry เฉพาะ Postgres SQLSTATE `40001` (serialization_failure)/`40P01` (deadlock_detected) สูงสุด 3 attempts: ครั้งแรกทันที แล้ว full-jitter 0–500 ms และ 0–1,000 ms ส่วน signature, validation, payload mismatch และสถานะที่ไม่รองรับเป็น permanent error ไม่ retry อัตโนมัติ สถานะจริงยังตรวจซ้ำได้จาก `GET /api/celox/c2c/{reference}` ซึ่งเป็นแหล่งข้อมูลหลักของ C2C
+Response คือ `{ "received": true, "duplicate": false }`; เมื่อส่ง body เดิมซ้ำจะได้ `duplicate: true` และไม่มีการปรับยอดซ้ำ ส่วน body ที่ต่างจากเดิมบนสถานะ terminal เดิมจะได้ 409
+
+Callback C2C ไม่มี retry จาก Celox ระบบจึงตอบ 200 หลัง commit inbox เท่านั้น งานหลัง response retry เฉพาะ Postgres SQLSTATE `40001` (serialization_failure)/`40P01` (deadlock_detected) สูงสุด 3 attempts: ครั้งแรกทันที แล้ว full-jitter 0–500 ms และ 0–1,000 ms ส่วน signature, timestamp เกิน 300 วินาที, validation, payload mismatch และยอดสามตัวที่ไม่ลงรอยกันเป็น permanent error ไม่ retry อัตโนมัติและไม่ขยับเงินสักบาท สถานะจริงยังตรวจซ้ำได้จาก `GET /api/celox/c2c/{reference}` ซึ่งเป็นแหล่งข้อมูลหลักของ C2C
+
+คำขอถอน C2C ที่ถูกแบ่งเป็นก้อนย่อยยิง callback **ครั้งเดียว** ตอนที่ทุกก้อนจบแล้ว ไม่มีการยิงระหว่างจับคู่/ปิดทีละก้อน ถ้าต้องเฝ้ารายการที่ยังวิ่งอยู่ให้ poll `GET /api/celox/c2c/{reference}` ส่วนฝั่งฝากยังยิงทุกครั้งที่สถานะเปลี่ยนเหมือนเดิม
 
 ### Retry และ backoff policy สำหรับ C2C
 
