@@ -31,7 +31,7 @@ function basePayload(overrides: Partial<CeloxC2CCallbackRequest> = {}): CeloxC2C
     transactionStatus: "PENDING_MANUAL_C2C",
     amount: 2000,
     feeAmount: 30,
-    realWithdrawAmount: 0,
+    settledAmount: 0,
     heldAmount: 30,
     unfilledAmount: 0,
     awaitingManualReview: false,
@@ -53,38 +53,38 @@ function basePayload(overrides: Partial<CeloxC2CCallbackRequest> = {}): CeloxC2C
 async function storedEvent(transactionId: string) {
   return await db.first<{
     amount_satang: number;
-    real_withdraw_amount_satang: number;
+    settled_amount_satang: number;
     signed_payload_hash: string;
     received_count: number;
   }>(`
-    SELECT amount_satang, real_withdraw_amount_satang, signed_payload_hash, received_count
+    SELECT amount_satang, settled_amount_satang, signed_payload_hash, received_count
     FROM celox_c2c_callback_events WHERE transaction_id = ?
   `, [transactionId]);
 }
 
 describe("enqueueCeloxC2CCallbackEvent — การยิงซ้ำของสถานะเดิม", () => {
   it("ไม่ถือว่า conflict เมื่อสถานะที่ยังไม่ terminal ถูกส่งซ้ำโดยยอดที่ขยับได้เปลี่ยนไป", async () => {
-    const first = basePayload({ realWithdrawAmount: 0 });
+    const first = basePayload({ settledAmount: 0 });
     await enqueueCeloxC2CCallbackEvent(first, HASH_A);
 
     // amount ยังเป็นยอดตั้งต้นเดิม เปลี่ยนแค่ยอดที่ถอนสำเร็จจริงระหว่างที่กลุ่มยังวิ่งอยู่
-    const second = basePayload({ transactionId: first.transactionId, realWithdrawAmount: 600 });
+    const second = basePayload({ transactionId: first.transactionId, settledAmount: 600 });
     const queued = await enqueueCeloxC2CCallbackEvent(second, HASH_B);
 
     expect(queued.conflict).toBe(false);
     expect(queued.duplicate).toBe(true);
   });
 
-  it("อัปเดต realWithdrawAmount และ signed_payload_hash ของแถวเดิมเป็นค่าล่าสุดที่ส่งมา", async () => {
-    const first = basePayload({ realWithdrawAmount: 0 });
+  it("อัปเดต settledAmount และ signed_payload_hash ของแถวเดิมเป็นค่าล่าสุดที่ส่งมา", async () => {
+    const first = basePayload({ settledAmount: 0 });
     await enqueueCeloxC2CCallbackEvent(first, HASH_A);
 
-    const second = basePayload({ transactionId: first.transactionId, realWithdrawAmount: 600 });
+    const second = basePayload({ transactionId: first.transactionId, settledAmount: 600 });
     await enqueueCeloxC2CCallbackEvent(second, HASH_B);
 
     const row = await storedEvent(first.transactionId);
     expect(row?.amount_satang).toBe(200_000);
-    expect(row?.real_withdraw_amount_satang).toBe(60_000);
+    expect(row?.settled_amount_satang).toBe(60_000);
     expect(row?.signed_payload_hash).toBe(HASH_B);
     expect(row?.received_count).toBe(2);
   });
@@ -101,13 +101,13 @@ describe("enqueueCeloxC2CCallbackEvent — การยิงซ้ำของ�
   });
 
   it("ยังคง conflict เมื่อสถานะ terminal (SUCCESS) ถูกส่งซ้ำด้วย body ที่ต่างจากเดิม", async () => {
-    const first = basePayload({ transactionStatus: "SUCCESS", realWithdrawAmount: 2000, unfilledAmount: 0 });
+    const first = basePayload({ transactionStatus: "SUCCESS", settledAmount: 2000, unfilledAmount: 0 });
     await enqueueCeloxC2CCallbackEvent(first, HASH_A);
 
     const second = basePayload({
       transactionId: first.transactionId,
       transactionStatus: "SUCCESS",
-      realWithdrawAmount: 1400,
+      settledAmount: 1400,
       unfilledAmount: 600,
     });
     const queued = await enqueueCeloxC2CCallbackEvent(second, HASH_B);
@@ -116,7 +116,7 @@ describe("enqueueCeloxC2CCallbackEvent — การยิงซ้ำของ�
   });
 
   it("ไม่ conflict เมื่อสถานะ terminal ถูกส่งซ้ำด้วย body เดิมเป๊ะ (redelivery ปกติ)", async () => {
-    const payload = basePayload({ transactionStatus: "SUCCESS", realWithdrawAmount: 2000, unfilledAmount: 0 });
+    const payload = basePayload({ transactionStatus: "SUCCESS", settledAmount: 2000, unfilledAmount: 0 });
     await enqueueCeloxC2CCallbackEvent(payload, HASH_A);
     const queued = await enqueueCeloxC2CCallbackEvent(payload, HASH_A);
 

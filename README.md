@@ -377,20 +377,20 @@ https://YOUR_NGROK_DOMAIN/api/celox/callback
 3. ตรวจ `X-Celox-Signature` = HMAC-SHA256 ของ material ด้วย `CELOX_C2C_CALLBACK_SECRET` (fallback ไป `CELOX_CALLBACK_SECRET` หรือ `CELOX_CLIENT_SECRET`) เทียบแบบ constant-time และปฏิเสธถ้า `X-Celox-Timestamp` ห่างจากนาฬิกาเราเกิน 300 วินาทีทั้งสองทิศทาง
 4. ตรวจรูปร่างของ field ที่รู้จัก โดยไม่ปฏิเสธ body ที่มี field ใหม่ที่ยังไม่รู้จัก (raw body ถูก hash ทั้งก้อน field ใหม่จึงไม่ทำให้ลายเซ็นพัง)
 5. commit ลง durable inbox `celox_c2c_callback_events` ด้วย idempotency key `(transactionId, transactionStatus)` ก่อนตอบ HTTP 200
-6. ประมวลผล ledger หลัง response ผ่าน `after()`: ตัดเงินเฉพาะเมื่อ **ทุกก้อนใน `parts` จบแล้ว** โดยฝั่งถอนหักจาก `realWithdrawAmount` และคืน `unfilledAmount` ฝั่งฝากเครดิตจาก `amount` ของคำขอ ส่วนการยิงระหว่างทางเป็นการบันทึกสถานะล้วนๆ
+6. ประมวลผล ledger หลัง response ผ่าน `after()`: ตัดเงินเฉพาะเมื่อ **ทุกก้อนใน `parts` จบแล้ว** โดยอ่านยอดที่จบจริงจาก `settledAmount` ตัวเดียวทั้งขาฝากและขาถอน และฝั่งถอนคืน `unfilledAmount` ให้ลูกค้า ส่วนการยิงระหว่างทางเป็นการบันทึกสถานะล้วนๆ
 
-จุดที่เปลี่ยนจาก contract เดิม (breaking): field สถานะคือ `transactionStatus` ทั้งหัว body และใน `parts[]` ไม่ใช่ `status` อีกแล้ว, `settledAmount` เปลี่ยนชื่อเป็น `realWithdrawAmount`, `settledTotal`/`unfilledTotal` และ `occurredAt`/`event` ถูกถอดออก และ `amount` เป็นยอดตั้งต้นที่ลูกค้าขอเสมอ (ขอถอน 250 จบจริง 190 ก็ยังตอบ 250) จึงห้ามใช้ตัดเงิน
+จุดที่เปลี่ยนจาก contract เดิม (breaking): field สถานะคือ `transactionStatus` ทั้งหัว body และใน `parts[]` ไม่ใช่ `status` อีกแล้ว, ยอดที่จบจริงอ่านจาก `settledAmount` (ไม่มี `realWithdrawAmount` ให้ใช้), `settledTotal`/`unfilledTotal` และ `occurredAt`/`event` ถูกถอดออก และ `amount` เป็นยอดตั้งต้นที่ลูกค้าขอเสมอ (ขอถอน 250 จบจริง 190 ก็ยังตอบ 250) จึงห้ามใช้ตัดเงิน
 
 `transactionStatus` ที่หัว body เป็น roll-up ของ **ทั้งคำขอ** (ส่วนที่ต้องการความสนใจมากที่สุดชนะ) เป็น `SUCCESS` ได้ทั้งที่ยังมีก้อนวิ่งอยู่ ระบบจึงไม่เขียนสถานะ terminal ลงแถวจนกว่าทุกก้อนจะจบ ข้อมูล `transferTo` ไม่ถูกเก็บลง Postgres หรือ log; inbox เก็บเฉพาะ SHA-256 ของ raw body เพื่อจับ payload conflict โดยไม่เปิดเผยบัญชีบุคคลที่สาม
 
 ตัวอย่าง Callback ที่รันได้เมื่อ dev server เปิดอยู่ (เปลี่ยน ID ให้ตรงกับรายการ C2C จริงหากต้องการให้ ledger ถูกอัปเดต):
 
-ตัวอย่างนี้เป็นคำขอถอน 250 ที่ถูกแบ่งเป็น 100/100/50 แล้วสำเร็จก้อนเดียว — ต้องหักลูกค้า 100 (`realWithdrawAmount`) และคืน 150 (`unfilledAmount`) ไม่ใช่หัก 250 ตาม `amount`:
+ตัวอย่างนี้เป็นคำขอถอน 250 ที่ถูกแบ่งเป็น 100/100/50 แล้วสำเร็จก้อนเดียว — ต้องหักลูกค้า 100 (`settledAmount`) และคืน 150 (`unfilledAmount`) ไม่ใช่หัก 250 ตาม `amount`:
 
 ```bash
 export CELOX_C2C_CALLBACK_SECRET='your-plaintext-client-secret'
 
-C2C_CALLBACK_BODY='{"transactionId":"018f2e2a-0000-7000-8000-000000000010","orderId":"TXN-2608-00994","referenceId":"PAYOUT-20260830-0001","direction":"withdraw","transactionStatus":"SUCCESS","amount":250,"feeAmount":3.75,"realWithdrawAmount":100,"heldAmount":0,"unfilledAmount":150,"awaitingManualReview":false,"matchDeadline":null,"transferTo":null,"parts":[{"orderId":"TXN-2608-00994-1","amount":100,"feeAmount":1.5,"transactionStatus":"SUCCESS","matchDeadline":null,"matchedAt":"2026-08-31T10:15:00.000Z","cancelReason":null},{"orderId":"TXN-2608-00994-2","amount":100,"feeAmount":1.5,"transactionStatus":"CANCELLED","matchDeadline":null,"matchedAt":null,"cancelReason":"หมดเวลาโอน"},{"orderId":"TXN-2608-00994-3","amount":50,"feeAmount":0.75,"transactionStatus":"CANCELLED","matchDeadline":null,"matchedAt":null,"cancelReason":"ผู้ใช้ยกเลิก"}]}'
+C2C_CALLBACK_BODY='{"transactionId":"018f2e2a-0000-7000-8000-000000000010","orderId":"TXN-2608-00994","referenceId":"PAYOUT-20260830-0001","direction":"withdraw","transactionStatus":"SUCCESS","amount":250,"feeAmount":3.75,"settledAmount":100,"heldAmount":0,"unfilledAmount":150,"awaitingManualReview":false,"matchDeadline":null,"transferTo":null,"parts":[{"orderId":"TXN-2608-00994-1","amount":100,"feeAmount":1.5,"transactionStatus":"SUCCESS","matchDeadline":null,"matchedAt":"2026-08-31T10:15:00.000Z","cancelReason":null},{"orderId":"TXN-2608-00994-2","amount":100,"feeAmount":1.5,"transactionStatus":"CANCELLED","matchDeadline":null,"matchedAt":null,"cancelReason":"หมดเวลาโอน"},{"orderId":"TXN-2608-00994-3","amount":50,"feeAmount":0.75,"transactionStatus":"CANCELLED","matchDeadline":null,"matchedAt":null,"cancelReason":"ผู้ใช้ยกเลิก"}]}'
 C2C_TIMESTAMP="$(date +%s)"
 C2C_BODY_HASH="$(printf '%s' "$C2C_CALLBACK_BODY" | openssl dgst -sha256 -binary | xxd -p -c 256)"
 C2C_SIGNATURE="$(printf 'v2\n%s\n%s' "$C2C_TIMESTAMP" "$C2C_BODY_HASH" | openssl dgst -sha256 -hmac "$CELOX_C2C_CALLBACK_SECRET" -binary | xxd -p -c 256)"

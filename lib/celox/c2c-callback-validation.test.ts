@@ -26,7 +26,7 @@ function basePayload(overrides: Record<string, unknown> = {}) {
     transactionStatus: "PENDING_TRANSFER",
     amount: 2500,
     feeAmount: 37.5,
-    realWithdrawAmount: 0,
+    settledAmount: 0,
     heldAmount: 37.5,
     unfilledAmount: 0,
     awaitingManualReview: false,
@@ -101,7 +101,7 @@ describe("isCeloxC2CCallbackRequest", () => {
   it("ยอมรับ parts[] ที่ถูกยกเลิกพร้อม cancelReason และ matchedAt", () => {
     expect(isCeloxC2CCallbackRequest(basePayload({
       transactionStatus: "CANCELLED",
-      realWithdrawAmount: 0,
+      settledAmount: 0,
       unfilledAmount: 2500,
       heldAmount: 0,
       parts: [part({
@@ -138,20 +138,20 @@ describe("isCeloxC2CCallbackRequest", () => {
     expect(isCeloxC2CCallbackRequest(withoutUnfilled)).toBe(false);
   });
 
-  it("ปฏิเสธ callback ที่ไม่มี realWithdrawAmount (field ที่ใช้ตัดเงินฝั่งถอน)", () => {
-    const withoutRealWithdraw: Record<string, unknown> = basePayload();
-    delete withoutRealWithdraw.realWithdrawAmount;
-    expect(isCeloxC2CCallbackRequest(withoutRealWithdraw)).toBe(false);
+  it("ปฏิเสธ callback ที่ไม่มี settledAmount (field ที่ใช้ตัดเงินทั้งสองขา)", () => {
+    const withoutSettled: Record<string, unknown> = basePayload();
+    delete withoutSettled.settledAmount;
+    expect(isCeloxC2CCallbackRequest(withoutSettled)).toBe(false);
   });
 
-  it("ปฏิเสธ settledAmount ชื่อเดิมที่ส่งมาแทน realWithdrawAmount", () => {
+  it("ปฏิเสธ realWithdrawAmount ที่ส่งมาแทน settledAmount (field นั้นถูกลบไปแล้ว)", () => {
     const legacy: Record<string, unknown> = basePayload();
-    delete legacy.realWithdrawAmount;
-    expect(isCeloxC2CCallbackRequest({ ...legacy, settledAmount: 0 })).toBe(false);
+    delete legacy.settledAmount;
+    expect(isCeloxC2CCallbackRequest({ ...legacy, realWithdrawAmount: 0 })).toBe(false);
   });
 
-  it("ปฏิเสธ realWithdrawAmount ติดลบ", () => {
-    expect(isCeloxC2CCallbackRequest(basePayload({ realWithdrawAmount: -1 }))).toBe(false);
+  it("ปฏิเสธ settledAmount ติดลบ", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({ settledAmount: -1 }))).toBe(false);
   });
 
   it("ปฏิเสธ awaitingManualReview ที่ไม่ใช่ boolean", () => {

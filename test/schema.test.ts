@@ -100,7 +100,7 @@ describe("schema", () => {
     }
   });
 
-  it("คอลัมน์ boolean ทั้ง 7 ตัวเป็น boolean และ default เป็น false", async () => {
+  it("คอลัมน์ boolean ทั้ง 6 ตัวเป็น boolean และ default เป็น false", async () => {
     const booleanColumns = [
       { table_name: "celox_withdrawals", column_name: "funds_reserved" },
       { table_name: "celox_c2c_transactions", column_name: "funds_reserved" },
@@ -108,7 +108,6 @@ describe("schema", () => {
       { table_name: "celox_c2c_callback_events", column_name: "has_transfer_to" },
       // สรุปจาก parts[] และ awaitingManualReview ของ callback C2C contract ใหม่
       { table_name: "celox_c2c_callback_events", column_name: "all_parts_terminal" },
-      { table_name: "celox_c2c_callback_events", column_name: "any_part_succeeded" },
       { table_name: "celox_c2c_callback_events", column_name: "awaiting_manual_review" },
     ];
     const rows = await db.query<{ table_name: string; column_name: string; data_type: string; column_default: string | null }>(`

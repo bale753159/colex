@@ -378,7 +378,7 @@ describe("lib/db.ts on Postgres", () => {
     const base: CeloxC2CCallbackRequest = {
       transactionId: "TX-C2C-DUP", orderId: "O-C2C-DUP", referenceId: "REF-C2C-DUP",
       direction: "withdraw", transactionStatus: "SUCCESS", amount: 25, feeAmount: 0.38,
-      realWithdrawAmount: 25, heldAmount: 0, unfilledAmount: 0,
+      settledAmount: 25, heldAmount: 0, unfilledAmount: 0,
       awaitingManualReview: false, matchDeadline: null, transferTo: null,
       parts: [{
         orderId: "O-C2C-DUP-1", amount: 25, feeAmount: 0.38, transactionStatus: "SUCCESS",
@@ -433,7 +433,7 @@ describe("lib/db.ts on Postgres", () => {
     await db.run(`
       INSERT INTO celox_c2c_transactions (
         transaction_id, order_id, reference_id, customer_id, direction,
-        transaction_status, amount_satang, fee_amount_satang, real_withdraw_amount_satang,
+        transaction_status, amount_satang, fee_amount_satang, settled_amount_satang,
         held_amount_satang, awaiting_manual_review, match_deadline, funds_reserved,
         local_transaction_id, created_at, updated_at
       ) VALUES ('TX-UP', 'ORD-UPPER', 'REF-UPPER', 'C-1', 'withdraw',

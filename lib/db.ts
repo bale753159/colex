@@ -148,8 +148,8 @@ type CeloxC2CRow = {
   transaction_status: C2CTransactionStatus;
   amount_satang: number;
   fee_amount_satang: number;
-  // ยอดที่ถอนสำเร็จจริง (เปลี่ยนชื่อมาจาก real_withdraw_amount_satang ตาม field realWithdrawAmount)
-  real_withdraw_amount_satang: number;
+  // ยอดที่จบจริงของคำขอ อ่านจาก field settledAmount ทั้งขาฝากและขาถอน
+  settled_amount_satang: number;
   held_amount_satang: number;
   // ฝั่งถอน: ยอดที่ต้องคืนลูกค้า · ฝั่งฝากและรายการที่ยังไม่จบเป็น null
   unfilled_amount_satang: number | null;
@@ -178,12 +178,11 @@ type CeloxC2CCallbackRow = {
   reference_id: string | null;
   provider_status: string;
   amount_satang: number;
-  real_withdraw_amount_satang: number;
+  settled_amount_satang: number;
   unfilled_amount_satang: number | null;
   // สรุปจาก parts[] ตอน enqueue — head provider_status เป็น roll-up ที่เป็น SUCCESS ได้
   // ทั้งที่ยังมีก้อนวิ่งอยู่ จึงใช้บอกว่า "คำขอจบแล้ว" ไม่ได้
   all_parts_terminal: boolean;
-  any_part_succeeded: boolean;
   awaiting_manual_review: boolean;
   signed_payload_hash: string;
   has_transfer_to: boolean;
@@ -1206,59 +1205,61 @@ async function getC2CLocalTransaction(t: Tx, row: CeloxC2CRow) {
 
 // C2C ฝั่งถอนปิดคู่แบบได้ไม่ครบยอดได้ (unfilledAmount > 0) — ต้องหักลูกค้าแค่ยอดที่โอนจริง
 // แล้วคืนส่วนที่ไม่เคยจับคู่กลับเข้า withdrawable แทนที่จะหักเต็มยอดที่กันไว้ตอนสร้างรายการ
-async function settleC2CWithdrawal(t: Tx, row: CeloxC2CRow, realWithdrawSatang: number) {
+async function settleC2CWithdrawal(t: Tx, row: CeloxC2CRow, settledSatang: number) {
   if (
-    !Number.isInteger(realWithdrawSatang)
-    || realWithdrawSatang < 0
-    || realWithdrawSatang > row.amount_satang
+    !Number.isInteger(settledSatang)
+    || settledSatang < 0
+    || settledSatang > row.amount_satang
   ) {
-    throw new Error("ยอดที่ Celox ยืนยันว่าถอนสำเร็จจริงไม่สอดคล้องกับยอดที่กันไว้เดิมของรายการถอน C2C");
+    throw new Error("ยอดที่ Celox ยืนยันว่าจบจริงไม่สอดคล้องกับยอดที่กันไว้เดิมของรายการถอน C2C");
   }
-  const unfilledSatang = row.amount_satang - realWithdrawSatang;
+  const unfilledSatang = row.amount_satang - settledSatang;
   const updated = await t.run(`
     UPDATE customers
     SET balance_satang = balance_satang - ?, withdrawable_satang = withdrawable_satang + ?
     WHERE id = ? AND balance_satang >= ?
       AND balance_satang - ? >= withdrawable_satang
-  `, [realWithdrawSatang, unfilledSatang, row.customer_id, row.amount_satang, row.amount_satang]);
+  `, [settledSatang, unfilledSatang, row.customer_id, row.amount_satang, row.amount_satang]);
   return updated.rowCount === 1;
 }
 
 /**
  * ยอดที่ต้องขยับจริงของคำขอ C2C หนึ่งครั้งเมื่อ "ทุกก้อนจบแล้ว"
  *
- * - ฝั่งถอนตัดเงินจาก realWithdrawAmount (ผลรวมก้อนที่ SUCCESS) และคืน unfilledAmount
- *   ห้ามใช้ amount ซึ่งเป็นยอดตั้งต้นที่ลูกค้าขอเสมอ ไม่ใช่ยอดที่จบจริงอีกต่อไป
- * - ฝั่งฝากใช้ amount ของคำขอ เพราะ realWithdrawAmount เป็น field ของฝั่งถอน
- *   (รายการฝากตอบ 0 ตลอดแม้ตอน SUCCESS) และฝากเป็นกลุ่มขนาดหนึ่งเสมอ
- * - โยน error เมื่อยอดสามตัวไม่ลงรอยกัน เพื่อไม่ให้เงินขยับตามข้อมูลที่ขัดกันเอง
+ * - ยอดที่จบจริงอ่านจาก `settledAmount` ตัวเดียวทั้งขาฝากและขาถอน ห้ามใช้ `amount`
+ *   ซึ่งเป็นยอดตั้งต้นที่ลูกค้าขอเสมอ ไม่ใช่ยอดที่จบจริงอีกต่อไป
+ * - ฝั่งถอนต้องคืน `unfilledAmount` ให้ลูกค้าและต้องลงรอยกับยอดตั้งต้น
+ *   (settledAmount + unfilledAmount = amount) ฝั่งฝากไม่มีแนวคิดนี้ จึงเป็น null เสมอ
+ * - โยน error เมื่อยอดไม่ลงรอยกัน เพื่อไม่ให้เงินขยับตามข้อมูลที่ขัดกันเอง
  */
 function c2cTerminalMoney(input: {
   direction: "deposit" | "withdraw";
   amountSatang: number;
-  realWithdrawSatang: number;
+  settledSatang: number;
   unfilledSatang: number | null;
-  anyPartSucceeded: boolean;
 }) {
+  if (input.settledSatang > input.amountSatang) {
+    throw new Error("ยอดที่จบจริงของคำขอ C2C มากกว่ายอดตั้งต้นที่ลูกค้าขอ");
+  }
   if (input.direction === "deposit") {
     return {
-      creditedSatang: input.anyPartSucceeded ? input.amountSatang : 0,
+      creditedSatang: input.settledSatang,
       unfilledSatang: null,
-      succeeded: input.anyPartSucceeded,
+      succeeded: input.settledSatang > 0,
     };
   }
   if (input.unfilledSatang === null) {
     throw new Error("รายการถอน C2C ที่จบแล้วต้องมี unfilledAmount เป็นตัวเลข");
   }
-  if (input.realWithdrawSatang + input.unfilledSatang !== input.amountSatang) {
+  if (input.settledSatang + input.unfilledSatang !== input.amountSatang) {
     throw new Error(
-      "ยอดถอนสำเร็จจริงรวมกับยอดที่ต้องคืนไม่เท่ากับยอดตั้งต้นของคำขอถอน C2C ที่จบแล้ว",
+      "ยอดที่จบจริงรวมกับยอดที่ต้องคืนไม่เท่ากับยอดตั้งต้นของคำขอถอน C2C ที่จบแล้ว",
     );
   }
   return {
-    creditedSatang: input.realWithdrawSatang,
+    creditedSatang: input.settledSatang,
     unfilledSatang: input.unfilledSatang,
-    succeeded: input.realWithdrawSatang > 0,
+    succeeded: input.settledSatang > 0,
   };
 }
 
@@ -1272,9 +1273,6 @@ function everyC2CPartTerminal(parts: readonly C2CTransactionPart[]) {
   return parts.every((item) => isC2CTerminalStatus(item.transactionStatus));
 }
 
-function anyC2CPartSucceeded(parts: readonly C2CTransactionPart[]) {
-  return parts.some((item) => item.transactionStatus === "SUCCESS");
-}
 
 async function finalizeC2CSuccess(
   t: Tx,
@@ -1314,7 +1312,7 @@ async function finalizeC2CSuccess(
   // คำขอที่จบแบบ CANCELLED ยังมีบางก้อนโอนสำเร็จได้ เงินจึงขยับแต่สถานะรวมไม่ใช่ SUCCESS
   await t.run(`
     UPDATE celox_c2c_transactions
-    SET transaction_status = ?, real_withdraw_amount_satang = ?, unfilled_amount_satang = ?,
+    SET transaction_status = ?, settled_amount_satang = ?, unfilled_amount_satang = ?,
         held_amount_satang = 0, funds_reserved = false, match_deadline = NULL, updated_at = ?
     WHERE transaction_id = ?
   `, [row.transaction_status, money.creditedSatang, money.unfilledSatang, now, row.transaction_id]);
@@ -1341,7 +1339,7 @@ async function finalizeC2CFailure(
     [row.local_transaction_id]);
   await t.run(`
     UPDATE celox_c2c_transactions
-    SET transaction_status = ?, real_withdraw_amount_satang = ?, unfilled_amount_satang = ?,
+    SET transaction_status = ?, settled_amount_satang = ?, unfilled_amount_satang = ?,
         funds_reserved = false, held_amount_satang = 0, match_deadline = NULL, updated_at = ?
     WHERE transaction_id = ?
   `, [
@@ -1391,7 +1389,7 @@ export async function recordCeloxC2CDepositIntent(input: {
       INSERT INTO celox_c2c_transactions (
         transaction_id, order_id, reference_id, customer_id, direction,
         transaction_status, amount_satang, fee_amount_satang,
-        real_withdraw_amount_satang, held_amount_satang, awaiting_manual_review,
+        settled_amount_satang, held_amount_satang, awaiting_manual_review,
         match_deadline, funds_reserved, local_transaction_id, created_at, updated_at
       ) VALUES (?, ?, ?, ?, 'deposit', ?, ?, 0, 0, 0, false, ?, false, ?, ?, ?)
     `, [
@@ -1500,7 +1498,7 @@ export async function recordCeloxC2CWithdrawalIntent(input: {
       INSERT INTO celox_c2c_transactions (
         transaction_id, order_id, reference_id, customer_id, direction,
         transaction_status, amount_satang, fee_amount_satang,
-        real_withdraw_amount_satang, held_amount_satang, awaiting_manual_review,
+        settled_amount_satang, held_amount_satang, awaiting_manual_review,
         match_deadline, funds_reserved, local_transaction_id, created_at, updated_at
       ) VALUES (?, ?, ?, ?, 'withdraw', ?, ?, ?, 0, ?, ?, ?, true, ?, ?, ?)
     `, [
@@ -1619,7 +1617,7 @@ export async function syncCeloxC2CTransaction(result: C2CTransactionResponse) {
           INSERT INTO celox_c2c_transactions (
             transaction_id, order_id, reference_id, customer_id, direction,
             transaction_status, amount_satang, fee_amount_satang,
-            real_withdraw_amount_satang, held_amount_satang, awaiting_manual_review,
+            settled_amount_satang, held_amount_satang, awaiting_manual_review,
             match_deadline, funds_reserved, local_transaction_id, created_at, updated_at
           ) VALUES (?, ?, ?, ?, 'withdraw', ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
         `, [
@@ -1630,7 +1628,7 @@ export async function syncCeloxC2CTransaction(result: C2CTransactionResponse) {
           result.transactionStatus,
           amountSatang,
           toSatang(result.feeAmount),
-          toSatang(result.realWithdrawAmount),
+          toSatang(result.settledAmount),
           toSatang(result.heldAmount),
           result.awaitingManualReview ? true : false,
           result.matchDeadline,
@@ -1664,14 +1662,14 @@ export async function syncCeloxC2CTransaction(result: C2CTransactionResponse) {
 
     await t.run(`
       UPDATE celox_c2c_transactions
-      SET transaction_status = ?, fee_amount_satang = ?, real_withdraw_amount_satang = ?,
+      SET transaction_status = ?, fee_amount_satang = ?, settled_amount_satang = ?,
           held_amount_satang = ?, unfilled_amount_satang = ?, awaiting_manual_review = ?,
           match_deadline = ?, updated_at = ?
       WHERE transaction_id = ?
     `, [
       nextStatus,
       toSatang(result.feeAmount),
-      toSatang(result.realWithdrawAmount),
+      toSatang(result.settledAmount),
       toSatang(result.heldAmount),
       result.unfilledAmount === null ? null : toSatang(result.unfilledAmount),
       result.awaitingManualReview ? true : false,
@@ -1681,15 +1679,14 @@ export async function syncCeloxC2CTransaction(result: C2CTransactionResponse) {
     ]);
 
     // เงินขยับได้เมื่อ "ทุกก้อนจบแล้ว" เท่านั้น — ระหว่างที่ยังมีก้อนวิ่งอยู่ ผลต่างของ
-    // realWithdrawAmount กับ amount คือส่วนที่ยังค้าง ไม่ใช่ส่วนที่ต้องคืนลูกค้า
+    // settledAmount กับ amount คือส่วนที่ยังค้าง ไม่ใช่ส่วนที่ต้องคืนลูกค้า
     if (!partsAllTerminal) return true;
 
     const money = c2cTerminalMoney({
       direction: row.direction,
       amountSatang: row.amount_satang,
-      realWithdrawSatang: toSatang(result.realWithdrawAmount),
+      settledSatang: toSatang(result.settledAmount),
       unfilledSatang: result.unfilledAmount === null ? null : toSatang(result.unfilledAmount),
-      anyPartSucceeded: anyC2CPartSucceeded(result.parts),
     });
     const current = { ...row, transaction_status: nextStatus };
     if (money.succeeded) {
@@ -1734,7 +1731,7 @@ export async function listCeloxC2CTransactions(options: { search?: string; limit
     transactionStatus: row.transaction_status,
     amount: toMoney(row.amount_satang),
     feeAmount: toMoney(row.fee_amount_satang),
-    realWithdrawAmount: toMoney(row.real_withdraw_amount_satang),
+    settledAmount: toMoney(row.settled_amount_satang),
     unfilledAmount: row.unfilled_amount_satang === null ? null : toMoney(row.unfilled_amount_satang),
     heldAmount: toMoney(row.held_amount_satang),
     awaitingManualReview: row.awaiting_manual_review,
@@ -1767,7 +1764,7 @@ function sameInstant(stored: string | null, incoming: string | null) {
 /**
  * `amount` กลับมาเป็น identity field ได้แล้ว: contract ใหม่ตอบยอดตั้งต้นของคำขอเสมอ
  * ไม่เขียนทับเป็นยอดที่จบจริงเมื่อคู่โอนมาไม่ครบอีกต่อไป ยอดที่เปลี่ยนได้ระหว่างการยิงซ้ำ
- * ของสถานะเดียวกันคือ realWithdrawAmount/heldAmount ซึ่งอยู่ในคอลัมน์ของตัวเองและถูก
+ * ของสถานะเดียวกันคือ settledAmount/heldAmount ซึ่งอยู่ในคอลัมน์ของตัวเองและถูก
  * อัปเดตทับได้ ไม่ใช่ตัวชี้ว่าเป็นข้อมูลคนละชุด
  *
  * สถานะที่ยังไม่ terminal จึงยอมให้ body ต่างจากเดิมได้ (hash ต่างกันเป็นเรื่องปกติ)
@@ -1795,20 +1792,19 @@ export async function enqueueCeloxC2CCallbackEvent(
     throw new Error("hash ของ signed payload C2C ไม่ถูกต้อง");
   }
   const amountSatang = validMoneySatang(input.amount);
-  const realWithdrawSatang = toSatang(input.realWithdrawAmount);
+  const settledSatang = toSatang(input.settledAmount);
   const unfilledSatang = input.unfilledAmount === null ? null : toSatang(input.unfilledAmount);
   const allPartsTerminal = everyC2CPartTerminal(input.parts);
-  const anyPartSucceeded = anyC2CPartSucceeded(input.parts);
   const now = new Date().toISOString();
 
   return await tx(async (t) => {
     const inserted = await t.run(`
       INSERT INTO celox_c2c_callback_events (
         transaction_id, order_id, reference_id, provider_status, amount_satang,
-        real_withdraw_amount_satang, unfilled_amount_satang, all_parts_terminal,
-        any_part_succeeded, awaiting_manual_review, signed_payload_hash, has_transfer_to,
+        settled_amount_satang, unfilled_amount_satang, all_parts_terminal,
+        awaiting_manual_review, signed_payload_hash, has_transfer_to,
         processing_state, received_at, last_received_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
       ON CONFLICT DO NOTHING
     `, [
       input.transactionId,
@@ -1816,10 +1812,9 @@ export async function enqueueCeloxC2CCallbackEvent(
       input.referenceId,
       input.transactionStatus,
       amountSatang,
-      realWithdrawSatang,
+      settledSatang,
       unfilledSatang,
       allPartsTerminal,
-      anyPartSucceeded,
       input.awaitingManualReview,
       signedPayloadHash,
       input.transferTo ? true : false,
@@ -1845,10 +1840,9 @@ export async function enqueueCeloxC2CCallbackEvent(
       UPDATE celox_c2c_callback_events
       SET received_count = received_count + 1,
           last_received_at = ?,
-          real_withdraw_amount_satang = ?,
+          settled_amount_satang = ?,
           unfilled_amount_satang = ?,
           all_parts_terminal = ?,
-          any_part_succeeded = ?,
           awaiting_manual_review = ?,
           signed_payload_hash = ?,
           processing_state = CASE WHEN processing_state IN ('failed', 'unmatched') THEN 'pending' ELSE processing_state END,
@@ -1857,10 +1851,9 @@ export async function enqueueCeloxC2CCallbackEvent(
       WHERE id = ?
     `, [
       now,
-      realWithdrawSatang,
+      settledSatang,
       unfilledSatang,
       allPartsTerminal,
-      anyPartSucceeded,
       input.awaitingManualReview,
       signedPayloadHash,
       event.id,
@@ -1922,7 +1915,7 @@ async function adoptCeloxC2CWithdrawalReservationFromCallback(
     INSERT INTO celox_c2c_transactions (
       transaction_id, order_id, reference_id, customer_id, direction,
       transaction_status, amount_satang, fee_amount_satang,
-      real_withdraw_amount_satang, held_amount_satang, awaiting_manual_review,
+      settled_amount_satang, held_amount_satang, awaiting_manual_review,
       match_deadline, funds_reserved, local_transaction_id, created_at, updated_at
     ) VALUES (?, ?, ?, ?, 'withdraw', ?, ?, 0, 0, ?, false, NULL, true, ?, ?, ?)
   `, [
@@ -2016,12 +2009,12 @@ export async function processCeloxC2CCallbackEvent(eventId: number) {
       ) {
         await t.run(`
           UPDATE celox_c2c_transactions
-          SET transaction_status = ?, real_withdraw_amount_satang = ?,
+          SET transaction_status = ?, settled_amount_satang = ?,
               unfilled_amount_satang = ?, awaiting_manual_review = ?, updated_at = ?
           WHERE transaction_id = ?
         `, [
           event.provider_status,
-          event.real_withdraw_amount_satang,
+          event.settled_amount_satang,
           event.unfilled_amount_satang,
           event.awaiting_manual_review,
           now,
@@ -2044,9 +2037,8 @@ export async function processCeloxC2CCallbackEvent(eventId: number) {
         money = c2cTerminalMoney({
           direction: row.direction,
           amountSatang: row.amount_satang,
-          realWithdrawSatang: event.real_withdraw_amount_satang,
+          settledSatang: event.settled_amount_satang,
           unfilledSatang: event.unfilled_amount_satang,
-          anyPartSucceeded: event.any_part_succeeded,
         });
       } catch (error) {
         moneyError = error instanceof Error

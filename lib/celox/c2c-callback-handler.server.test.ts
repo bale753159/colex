@@ -28,7 +28,7 @@ function withdrawalCallback(overrides: Partial<CeloxC2CCallbackRequest> = {}): C
     transactionStatus: "SUCCESS",
     amount: 2500,
     feeAmount: 37.5,
-    realWithdrawAmount: 2500,
+    settledAmount: 2500,
     heldAmount: 0,
     unfilledAmount: 0,
     awaitingManualReview: false,

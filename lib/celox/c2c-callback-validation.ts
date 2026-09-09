@@ -142,7 +142,7 @@ export function isC2CTransactionResponse(value: unknown): value is C2CTransactio
     && isStatus(value.transactionStatus)
     && isPositiveCentAmount(value.amount)
     && isNonNegativeCentAmount(value.feeAmount)
-    && isNonNegativeCentAmount(value.realWithdrawAmount)
+    && isNonNegativeCentAmount(value.settledAmount)
     && isNonNegativeCentAmount(value.heldAmount)
     && validUnfilledAmount
     && typeof value.awaitingManualReview === "boolean"

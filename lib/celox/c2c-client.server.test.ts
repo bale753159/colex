@@ -12,7 +12,7 @@ function transactionFixture(overrides: Record<string, unknown> = {}) {
     transactionStatus: "PENDING_TRANSFER",
     amount: 1000,
     feeAmount: 15,
-    realWithdrawAmount: 0,
+    settledAmount: 0,
     heldAmount: 1015,
     awaitingManualReview: false,
     matchDeadline: null,
@@ -71,11 +71,11 @@ describe("checkC2CTransaction", () => {
     await expect(checkC2CTransaction("TXN-2608-00994")).rejects.toMatchObject({ code: "invalid_response" });
   });
 
-  it("อ่าน realWithdrawAmount เป็นยอดที่ถอนสำเร็จจริง แยกจาก amount ที่เป็นยอดตั้งต้น", async () => {
+  it("อ่าน settledAmount เป็นยอดที่จบจริง แยกจาก amount ที่เป็นยอดตั้งต้น", async () => {
     stubFetchJson(transactionFixture({
       transactionStatus: "SUCCESS",
       amount: 250,
-      realWithdrawAmount: 190,
+      settledAmount: 190,
       unfilledAmount: 60,
       heldAmount: 0,
       parts: [
@@ -93,14 +93,14 @@ describe("checkC2CTransaction", () => {
     }));
     const result = await checkC2CTransaction("TXN-2608-00994");
     expect(result.amount).toBe(250);
-    expect(result.realWithdrawAmount).toBe(190);
-    expect(result.realWithdrawAmount + (result.unfilledAmount ?? 0)).toBe(result.amount);
+    expect(result.settledAmount).toBe(190);
+    expect(result.settledAmount + (result.unfilledAmount ?? 0)).toBe(result.amount);
   });
 
-  it("ปฏิเสธ response ที่ยังใช้ชื่อ settledAmount เดิม (ไม่มี field นี้อีกแล้ว)", async () => {
+  it("ปฏิเสธ response ที่ใช้ชื่อ realWithdrawAmount (field นั้นถูกลบไปแล้ว)", async () => {
     const legacy: Record<string, unknown> = transactionFixture();
-    delete legacy.realWithdrawAmount;
-    stubFetchJson({ ...legacy, settledAmount: 0 });
+    delete legacy.settledAmount;
+    stubFetchJson({ ...legacy, realWithdrawAmount: 0 });
     await expect(checkC2CTransaction("TXN-2608-00994")).rejects.toMatchObject({ code: "invalid_response" });
   });
 
