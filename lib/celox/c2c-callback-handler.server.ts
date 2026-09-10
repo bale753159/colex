@@ -2,9 +2,9 @@ import "server-only";
 
 import { after } from "next/server";
 import {
-  hashCeloxC2CCallbackPayload,
+  hashRawC2CCallbackBody,
   processCeloxC2CCallbackEventWithRetry,
-  verifyCeloxC2CCallbackSignature,
+  verifyCeloxC2CCallbackSignatureV2,
 } from "./c2c-callback.server";
 import { isCeloxC2CCallbackRequest } from "./c2c-callback-validation";
 import { CeloxError } from "./client.server";
@@ -18,15 +18,25 @@ function errorResponse(status: number, error: string, code: string) {
   });
 }
 
+/**
+ * แยก C2C ออกจาก callback ขาบัญชีปกติที่ endpoint รวม: C2C คือ body ที่มี `parts` เป็น array
+ * หรือมีคีย์ `transactionStatus` — ห้ามใช้ `event`/`transferTo` อีกต่อไป `event` ถูกถอดออกจาก
+ * สัญญาใหม่ และ `transferTo` เป็นแค่ field แบบมีเงื่อนไขของขาฝากที่ยังรอโอน
+ */
 export function looksLikeCeloxC2CCallback(value: unknown) {
-  return typeof value === "object"
-    && value !== null
-    && !Array.isArray(value)
-    && (Object.hasOwn(value, "event") || Object.hasOwn(value, "transferTo"));
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return Array.isArray((value as { parts?: unknown }).parts)
+    || Object.hasOwn(value, "transactionStatus");
 }
 
+/**
+ * ลำดับคือ validate ก่อนแล้วค่อย verify ลายเซ็น: body รูปแบบใหม่ที่ลายเซ็นไม่ผ่านจึงตอบ 401
+ * ส่วน body รูปแบบเก่าตอบ 422 — ใช้เป็น probe ตอน deploy ว่าโค้ดใหม่ขึ้นแล้วโดยไม่ต้องรู้ secret
+ */
 export async function acceptCeloxC2CCallbackPayload(
   payload: unknown,
+  rawBody: string,
+  timestampHeader: string | null,
   signatureHeader: string | null,
 ) {
   if (!isCeloxC2CCallbackRequest(payload)) {
@@ -34,7 +44,7 @@ export async function acceptCeloxC2CCallbackPayload(
   }
 
   try {
-    verifyCeloxC2CCallbackSignature(payload, signatureHeader);
+    verifyCeloxC2CCallbackSignatureV2(rawBody, timestampHeader, signatureHeader);
   } catch (error) {
     if (error instanceof CeloxError) {
       return errorResponse(error.httpStatus, error.message, error.code);
@@ -44,12 +54,12 @@ export async function acceptCeloxC2CCallbackPayload(
 
   let queued: Awaited<ReturnType<typeof enqueueCeloxC2CCallbackEvent>>;
   try {
-    queued = await enqueueCeloxC2CCallbackEvent(payload, hashCeloxC2CCallbackPayload(payload));
+    queued = await enqueueCeloxC2CCallbackEvent(payload, hashRawC2CCallbackBody(rawBody));
   } catch {
     return errorResponse(503, "บันทึก Callback C2C ลงระบบไม่สำเร็จ", "persistence_error");
   }
   if (queued.conflict) {
-    return errorResponse(409, "Callback C2C key เดิมมี signed payload ต่างจาก event ที่บันทึกไว้", "callback_conflict");
+    return errorResponse(409, "Callback C2C key เดิมมี body ต่างจาก event ที่บันทึกไว้", "callback_conflict");
   }
 
   if (queued.shouldProcess) {

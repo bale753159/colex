@@ -270,35 +270,11 @@ export type CeloxCallbackResponse = {
   duplicate: boolean;
 };
 
-export type CeloxC2CCallbackEventName =
-  | "matched"
-  | "settled"
-  | "parked"
-  | "expired"
-  | "cancelled"
-  | "failed";
-
-export type C2CCallbackPart = {
-  transactionId: string;
-  orderId: string;
-  amount: number;
-  status: string;
-};
-
-export type CeloxC2CCallbackRequest = {
-  transactionId: string;
-  orderId: string;
-  referenceId: string | null;
-  status: C2CTransactionStatus;
-  amount: number;
-  occurredAt: string | null;
-  event?: CeloxC2CCallbackEventName;
-  transferTo?: C2CTransferTo;
-  // ทุก callback ของ C2C มีเสมอ (แม้รายการไม่เคยถูกแบ่ง ก็ยังเป็น array หนึ่งสมาชิก)
-  parts: [C2CCallbackPart, ...C2CCallbackPart[]];
-  // มีเฉพาะ callback ฝั่งถอน C2C — เป็น 0 เมื่อคู่ปิดเต็มยอด
-  unfilledAmount?: number;
-};
+// Callback C2C ใช้ body รูปแบบเดียวกับ `GET /v1/core/c2c/{reference}` ทุก field
+// จึงประกาศเป็น type เดียวและ validate ด้วยตัวตัดสินเดียวกันทั้งสองฝั่ง
+// (สัญญาเดิมมี `status`, `occurredAt`, `event`, `settledTotal`, `unfilledTotal`
+//  และ `parts[].transactionId` — ถูกถอดออกจากสัญญาใหม่ทั้งหมด)
+export type CeloxC2CCallbackRequest = C2CTransactionResponse;
 
 // Celox ignores the acknowledgement body, but keeping it typed makes the
 // webhook contract observable in local tests and ngrok inspection.

@@ -371,30 +371,39 @@ describe("lib/db.ts on Postgres", () => {
     expect(realConflict.shouldProcess).toBe(false);
   });
 
-  it("treats a redelivered C2C callback as a duplicate across ISO spellings", async () => {
+  // สัญญา C2C ใหม่ไม่มี occurredAt แล้ว คีย์ยิงซ้ำจึงเหลือ transactionId + transactionStatus
+  // และตัวชี้ว่า body ต่างกันคือ sha256 ของ raw body ที่ลงลายเซ็นมา
+  it("keys the C2C inbox on transactionId + transactionStatus and conflicts on a different body", async () => {
     const hash = "b".repeat(64);
-    const base: Omit<CeloxC2CCallbackRequest, "occurredAt"> = {
-      transactionId: "TX-C2C-ISO", orderId: "O-C2C-ISO", referenceId: "REF-C2C-ISO",
-      status: "SUCCESS", amount: 25,
-      parts: [{ transactionId: "TX-C2C-ISO", orderId: "O-C2C-ISO", amount: 25, status: "SUCCESS" }],
-      unfilledAmount: 0,
+    const base: CeloxC2CCallbackRequest = {
+      transactionId: "TX-C2C-KEY", orderId: "O-C2C-KEY", referenceId: "REF-C2C-KEY",
+      direction: "withdraw", transactionStatus: "SUCCESS", amount: 25,
+      feeAmount: 0.5, settledAmount: 25, heldAmount: 0, unfilledAmount: 0,
+      awaitingManualReview: false, matchDeadline: null, transferTo: null,
+      parts: [{
+        orderId: "O-C2C-KEY", amount: 25, feeAmount: 0.5, transactionStatus: "SUCCESS",
+        matchDeadline: null, matchedAt: null, cancelReason: null,
+      }],
     };
-    const first = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:12.000Z" }, hash);
+    const first = await mod.enqueueCeloxC2CCallbackEvent(base, hash);
     expect(first.duplicate).toBe(false);
     expect(first.conflict).toBe(false);
 
-    const offsetSpelling = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T17:05:12+07:00" }, hash);
-    expect(offsetSpelling.eventId).toBe(first.eventId);
-    expect(offsetSpelling.duplicate).toBe(true);
-    expect(offsetSpelling.conflict).toBe(false);
+    // ยิงซ้ำ body เดิมเป๊ะ = duplicate ไม่ใช่ conflict
+    const redelivered = await mod.enqueueCeloxC2CCallbackEvent(base, hash);
+    expect(redelivered.eventId).toBe(first.eventId);
+    expect(redelivered.duplicate).toBe(true);
+    expect(redelivered.conflict).toBe(false);
 
-    const noMillis = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:12Z" }, hash);
-    expect(noMillis.duplicate).toBe(true);
-    expect(noMillis.conflict).toBe(false);
+    // amount ต่างกันในสถานะเดิม = conflict
+    const differentAmount = await mod.enqueueCeloxC2CCallbackEvent({ ...base, amount: 26 }, hash);
+    expect(differentAmount.conflict).toBe(true);
+    expect(differentAmount.shouldProcess).toBe(false);
 
-    const realConflict = await mod.enqueueCeloxC2CCallbackEvent({ ...base, occurredAt: "2026-08-30T10:05:13.000Z" }, hash);
-    expect(realConflict.conflict).toBe(true);
-    expect(realConflict.shouldProcess).toBe(false);
+    // สถานะ terminal เดิมแต่ raw body ต่าง = conflict
+    const differentBody = await mod.enqueueCeloxC2CCallbackEvent(base, "c".repeat(64));
+    expect(differentBody.conflict).toBe(true);
+    expect(differentBody.shouldProcess).toBe(false);
   });
 
   it("still treats a null occurredAt as matching only another null", async () => {

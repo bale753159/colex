@@ -1,4 +1,5 @@
 import { isCeloxBankCode } from "./celox/banks";
+import { areAllC2CPartsTerminal, isC2CTerminalStatus } from "./celox/c2c-callback-validation";
 import { db, tx, type Queryable, type Tx } from "./sql";
 import type {
   C2CDepositSlipResponse,
@@ -149,6 +150,7 @@ type CeloxC2CRow = {
   settled_amount_satang: number;
   held_amount_satang: number;
   awaiting_manual_review: boolean;
+  unfilled_amount_satang: number | null;
   match_deadline: string | null;
   funds_reserved: boolean;
   local_transaction_id: string;
@@ -173,8 +175,10 @@ type CeloxC2CCallbackRow = {
   reference_id: string | null;
   provider_status: string;
   amount_satang: number;
-  occurred_at: string | null;
-  provider_event: string | null;
+  settled_amount_satang: number;
+  unfilled_amount_satang: number | null;
+  awaiting_manual_review: boolean;
+  all_parts_terminal: boolean;
   signed_payload_hash: string;
   has_transfer_to: boolean;
   customer_id: string | null;
@@ -1248,12 +1252,21 @@ async function finalizeC2CSuccess(
 
   await t.run("UPDATE transactions SET status = 'success' WHERE id = ?",
     [row.local_transaction_id]);
+  // สถานะที่บันทึกคือสถานะที่ Celox รายงานมาจริง ไม่ hardcode 'SUCCESS' — คำขอที่ปิดแบบ
+  // CANCELLED/EXPIRED ยังมีบางก้อนสำเร็จได้ ทางเดินเงินแยกด้วย settledAmount > 0 ไม่ใช่สถานะรวม
   await t.run(`
     UPDATE celox_c2c_transactions
-    SET transaction_status = 'SUCCESS', settled_amount_satang = ?,
+    SET transaction_status = ?, settled_amount_satang = ?, unfilled_amount_satang = ?,
         held_amount_satang = 0, funds_reserved = false, updated_at = ?
     WHERE transaction_id = ?
-  `, [settledAmountSatang, now, row.transaction_id]);
+  `, [
+    row.transaction_status,
+    settledAmountSatang,
+    // ขาฝากไม่มียอดค้างคืน (`unfilledAmount` เป็น null เสมอ) ยอดค้างคืนมีเฉพาะขาถอน
+    row.direction === "withdraw" ? row.amount_satang - settledAmountSatang : null,
+    now,
+    row.transaction_id,
+  ]);
 }
 
 async function finalizeC2CFailure(
@@ -1277,9 +1290,15 @@ async function finalizeC2CFailure(
     [row.local_transaction_id]);
   await t.run(`
     UPDATE celox_c2c_transactions
-    SET settled_amount_satang = ?, funds_reserved = false, held_amount_satang = 0, updated_at = ?
+    SET settled_amount_satang = ?, unfilled_amount_satang = ?,
+        funds_reserved = false, held_amount_satang = 0, updated_at = ?
     WHERE transaction_id = ?
-  `, [settledAmountSatang, now, row.transaction_id]);
+  `, [
+    settledAmountSatang,
+    row.direction === "withdraw" ? row.amount_satang - settledAmountSatang : null,
+    now,
+    row.transaction_id,
+  ]);
 }
 
 export async function recordCeloxC2CDepositIntent(input: {
@@ -1542,9 +1561,10 @@ export async function syncCeloxC2CTransaction(result: C2CTransactionResponse) {
           INSERT INTO celox_c2c_transactions (
             transaction_id, order_id, reference_id, customer_id, direction,
             transaction_status, amount_satang, fee_amount_satang,
-            settled_amount_satang, held_amount_satang, awaiting_manual_review,
-            match_deadline, funds_reserved, local_transaction_id, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, 'withdraw', ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
+            settled_amount_satang, held_amount_satang, unfilled_amount_satang,
+            awaiting_manual_review, match_deadline, funds_reserved,
+            local_transaction_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'withdraw', ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
         `, [
           result.transactionId,
           result.orderId,
@@ -1555,6 +1575,7 @@ export async function syncCeloxC2CTransaction(result: C2CTransactionResponse) {
           toSatang(result.feeAmount),
           toSatang(result.settledAmount),
           toSatang(result.heldAmount),
+          result.unfilledAmount === null ? null : toSatang(result.unfilledAmount),
           result.awaitingManualReview ? true : false,
           result.matchDeadline,
           localTransactionId,
@@ -1568,8 +1589,8 @@ export async function syncCeloxC2CTransaction(result: C2CTransactionResponse) {
       }
     }
     if (!row) return false;
-    // `amount` ไม่ใช่ identity field: ฝั่งถอนที่ปิดคู่แบบได้ไม่ครบยอด Celox จะเขียนทับ
-    // `amount` เป็นยอดที่จบจริง ไม่ใช่ยอดคำขอเดิมอีกต่อไป ห้ามเอามาเทียบว่าเป็นรายการเดียวกันหรือไม่
+    // `amount` คือยอดที่ลูกค้าขอเสมอ ไม่ใช่ยอดที่ปิดได้จริง (ยอดจริงอยู่ที่ `settledAmount`)
+    // จึงยังใช้เทียบว่าเป็นรายการเดียวกันไม่ได้ เพราะ Celox เคยเขียนทับในสัญญาเดิม — ยึด orderId/referenceId
     if (
       row.transaction_id !== result.transactionId
       || row.order_id !== result.orderId
@@ -1582,13 +1603,15 @@ export async function syncCeloxC2CTransaction(result: C2CTransactionResponse) {
     await t.run(`
       UPDATE celox_c2c_transactions
       SET transaction_status = ?, fee_amount_satang = ?, settled_amount_satang = ?,
-          held_amount_satang = ?, awaiting_manual_review = ?, match_deadline = ?, updated_at = ?
+          held_amount_satang = ?, unfilled_amount_satang = ?, awaiting_manual_review = ?,
+          match_deadline = ?, updated_at = ?
       WHERE transaction_id = ?
     `, [
       result.transactionStatus,
       toSatang(result.feeAmount),
       toSatang(result.settledAmount),
       toSatang(result.heldAmount),
+      result.unfilledAmount === null ? null : toSatang(result.unfilledAmount),
       result.awaitingManualReview ? true : false,
       result.matchDeadline,
       now,
@@ -1680,7 +1703,6 @@ function c2cCallbackPayloadMatches(
   return row.order_id === input.orderId
     && row.reference_id === input.referenceId
     && row.amount_satang === amountSatang
-    && sameInstant(row.occurred_at, input.occurredAt)
     && row.signed_payload_hash === signedPayloadHash;
 }
 
@@ -1698,20 +1720,23 @@ export async function enqueueCeloxC2CCallbackEvent(
     const inserted = await t.run(`
       INSERT INTO celox_c2c_callback_events (
         transaction_id, order_id, reference_id, provider_status, amount_satang,
-        occurred_at, provider_event, signed_payload_hash, has_transfer_to,
+        settled_amount_satang, unfilled_amount_satang, awaiting_manual_review,
+        all_parts_terminal, signed_payload_hash, has_transfer_to,
         processing_state, received_at, last_received_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
       ON CONFLICT DO NOTHING
     `, [
       input.transactionId,
       input.orderId,
       input.referenceId,
-      input.status,
+      input.transactionStatus,
       amountSatang,
-      input.occurredAt,
-      input.event ?? null,
+      toSatang(input.settledAmount),
+      input.unfilledAmount === null ? null : toSatang(input.unfilledAmount),
+      input.awaitingManualReview ? true : false,
+      areAllC2CPartsTerminal(input.parts),
       signedPayloadHash,
-      Object.hasOwn(input, "transferTo") ? true : false,
+      input.transferTo ? true : false,
       now,
       now,
     ]);
@@ -1719,7 +1744,7 @@ export async function enqueueCeloxC2CCallbackEvent(
     const event = await t.first<CeloxC2CCallbackRow>(`
       SELECT * FROM celox_c2c_callback_events
       WHERE transaction_id = ? AND provider_status = ?
-    `, [input.transactionId, input.status]);
+    `, [input.transactionId, input.transactionStatus]);
     if (!event) throw new Error("บันทึก Callback C2C ลง inbox ไม่สำเร็จ");
 
     if (inserted.rowCount === 1) {
@@ -1817,10 +1842,6 @@ async function adoptCeloxC2CWithdrawalReservationFromCallback(
     [event.transaction_id]) as CeloxC2CRow;
 }
 
-function isC2CTerminalStatus(status: string) {
-  return status === "SUCCESS" || status === "EXPIRED" || status === "CANCELLED";
-}
-
 function isSupportedC2CCallbackStatus(status: string) {
   return isC2CTerminalStatus(status)
     || status === "PENDING_TRANSFER"
@@ -1855,8 +1876,8 @@ export async function processCeloxC2CCallbackEvent(eventId: number) {
         [eventId]) as CeloxC2CCallbackRow;
     }
 
-    // `amount` ไม่ใช่ identity field: ฝั่งถอนที่ปิดคู่แบบได้ไม่ครบยอด Celox จะเขียนทับ
-    // `amount` เป็นยอดที่จบจริง ไม่ใช่ยอดคำขอเดิมอีกต่อไป ห้ามเอามาเทียบว่าเป็นรายการเดียวกันหรือไม่
+    // `amount` คือยอดที่ลูกค้าขอเสมอ ไม่ใช่ยอดที่ปิดได้จริง (ยอดจริงอยู่ที่ `settledAmount`)
+    // จึงยังใช้เทียบว่าเป็นรายการเดียวกันไม่ได้ เพราะ Celox เคยเขียนทับในสัญญาเดิม — ยึด orderId/referenceId
     if (
       row.order_id !== event.order_id
       || row.reference_id !== event.reference_id
@@ -1876,81 +1897,86 @@ export async function processCeloxC2CCallbackEvent(eventId: number) {
       localTransactionId: row.local_transaction_id,
     };
 
-    if (event.provider_status === "PENDING_TRANSFER") {
-      // A delayed matched callback must never regress a row that already moved
-      // to slip review or a terminal state.
-      if (row.transaction_status === "PENDING" || row.transaction_status === "PENDING_TRANSFER") {
+    const settledSatang = event.settled_amount_satang;
+    const unfilledSatang = event.unfilled_amount_satang;
+
+    // ยอดที่นับจริงคือ settledAmount เท่านั้น ส่วน amount คือยอดที่ลูกค้าขอเสมอ
+    // ถ้าตัวเลขที่ Celox ส่งมาขัดกันเอง ให้บันทึก failed แล้วหยุด ห้ามขยับเงินตามตัวเลขที่เชื่อไม่ได้
+    // และห้าม throw เพราะจะกลายเป็น retry วนที่ไม่มีวันผ่าน
+    const brokenInvariant = settledSatang > row.amount_satang
+      ? `settledAmount (${settledSatang}) มากกว่ายอดคำขอ (${row.amount_satang})`
+      : unfilledSatang !== null && settledSatang + unfilledSatang !== event.amount_satang
+        ? `settledAmount + unfilledAmount (${settledSatang} + ${unfilledSatang}) ไม่เท่ากับ amount (${event.amount_satang})`
+        : null;
+    if (brokenInvariant) {
+      await finishCeloxC2CCallback(t, event, "failed", now, {
+        ...linked,
+        error: `ยอดใน Callback C2C ไม่สอดคล้องกัน: ${brokenInvariant}`,
+      });
+      return await t.first<CeloxC2CCallbackRow>("SELECT * FROM celox_c2c_callback_events WHERE id = ?",
+        [eventId]) as CeloxC2CCallbackRow;
+    }
+
+    if (!isSupportedC2CCallbackStatus(event.provider_status)) {
+      await finishCeloxC2CCallback(t, event, "failed", now, {
+        ...linked,
+        error: `ยังไม่รองรับสถานะ Callback C2C: ${event.provider_status}`,
+      });
+    } else if (!isC2CTerminalStatus(event.provider_status)) {
+      // สถานะระหว่างทาง: บันทึกสถานะกับธง awaiting review ตาม body ตรง ๆ
+      // แต่ห้ามถอยรายการที่ปิดไปแล้ว หรือดึง PENDING_TRANSFER ที่มาช้ากลับมาทับสถานะที่เดินหน้าไปแล้ว
+      const canAdvance = !isC2CTerminalStatus(row.transaction_status)
+        && (event.provider_status !== "PENDING_TRANSFER"
+          || row.transaction_status === "PENDING"
+          || row.transaction_status === "PENDING_TRANSFER");
+      if (canAdvance) {
         await t.run(`
           UPDATE celox_c2c_transactions
-          SET transaction_status = 'PENDING_TRANSFER', match_deadline = NULL,
-              awaiting_manual_review = false, updated_at = ?
-          WHERE transaction_id = ?
-        `, [now, row.transaction_id]);
-      }
-      await finishCeloxC2CCallback(t, event, "recorded", now, linked);
-    } else if (event.provider_status === "SUCCESS") {
-      if (!event.occurred_at) {
-        await finishCeloxC2CCallback(t, event, "failed", now, {
-          ...linked,
-          error: "Callback C2C สถานะ SUCCESS ไม่มี occurredAt",
-        });
-      } else if (row.transaction_status === "EXPIRED" || row.transaction_status === "CANCELLED") {
-        await finishCeloxC2CCallback(t, event, "failed", now, {
-          ...linked,
-          error: `Callback C2C สถานะ SUCCESS ชนกับสถานะปิด ${row.transaction_status}`,
-        });
-      } else {
-        // event.amount_satang คือยอดที่จบจริง (Celox เขียนทับ amount เดิมเมื่อปิดคู่แบบได้ไม่ครบยอด)
-        await finalizeC2CSuccess(t, { ...row, transaction_status: "SUCCESS" }, now, event.amount_satang);
-        await finishCeloxC2CCallback(t, event, "applied", now, linked);
-      }
-    } else if (event.provider_status === "EXPIRED" || event.provider_status === "CANCELLED") {
-      if (row.transaction_status === "SUCCESS") {
-        await finishCeloxC2CCallback(t, event, "failed", now, {
-          ...linked,
-          error: `Callback C2C สถานะ ${event.provider_status} ชนกับรายการที่สำเร็จแล้ว`,
-        });
-      } else if (isC2CTerminalStatus(row.transaction_status) && row.transaction_status !== event.provider_status) {
-        await finishCeloxC2CCallback(t, event, "failed", now, {
-          ...linked,
-          error: `Callback C2C สถานะ ${event.provider_status} ชนกับสถานะปิด ${row.transaction_status}`,
-        });
-      } else {
-        await t.run(`
-          UPDATE celox_c2c_transactions
-          SET transaction_status = ?, match_deadline = NULL,
-              awaiting_manual_review = false, updated_at = ?
-          WHERE transaction_id = ?
-        `, [event.provider_status, now, row.transaction_id]);
-        await finalizeC2CFailure(t, { ...row, transaction_status: event.provider_status }, now, event.amount_satang);
-        await finishCeloxC2CCallback(t, event, "applied", now, linked);
-      }
-    } else if (
-      event.provider_status === "PENDING_TOPUP_C2C"
-      || event.provider_status === "PENDING_MANUAL_C2C"
-      || event.provider_status === "PENDING_REFUND_C2C"
-      || event.provider_status === "PENDING_REVIEW"
-    ) {
-      // The manual says Celox does not emit these intermediate callbacks. If a
-      // valid signed event arrives, record the real status without using event.
-      if (!isC2CTerminalStatus(row.transaction_status)) {
-        await t.run(`
-          UPDATE celox_c2c_transactions
-          SET transaction_status = ?, awaiting_manual_review = ?, updated_at = ?
+          SET transaction_status = ?, awaiting_manual_review = ?,
+              settled_amount_satang = ?, unfilled_amount_satang = ?,
+              match_deadline = CASE WHEN ? THEN NULL ELSE match_deadline END,
+              updated_at = ?
           WHERE transaction_id = ?
         `, [
           event.provider_status,
-          event.provider_status === "PENDING_TOPUP_C2C" ? false : true,
+          event.awaiting_manual_review,
+          settledSatang,
+          unfilledSatang,
+          event.provider_status === "PENDING_TRANSFER",
           now,
           row.transaction_id,
         ]);
       }
       await finishCeloxC2CCallback(t, event, "recorded", now, linked);
-    } else {
+    } else if (!event.all_parts_terminal) {
+      // `transactionStatus` ที่หัว body เป็น roll-up ที่กลายเป็น SUCCESS ตั้งแต่ก้อนแรกสำเร็จ
+      // ตราบใดที่ยังมีก้อนที่ไม่ terminal คำขอยังไม่จบ — ห้ามขยับเงินและห้ามเขียนสถานะปิดลงเรกคอร์ด
+      // ส่วนที่ยังไม่รู้ผลให้ไปตามด้วยการ poll GET /v1/core/c2c/{reference}
+      await finishCeloxC2CCallback(t, event, "recorded", now, linked);
+    } else if (
+      isC2CTerminalStatus(row.transaction_status)
+      && row.transaction_status !== event.provider_status
+    ) {
       await finishCeloxC2CCallback(t, event, "failed", now, {
         ...linked,
-        error: `ยังไม่รองรับสถานะ Callback C2C: ${event.provider_status}`,
+        error: `Callback C2C สถานะ ${event.provider_status} ชนกับสถานะปิด ${row.transaction_status}`,
       });
+    } else {
+      const closed = { ...row, transaction_status: event.provider_status };
+      await t.run(`
+        UPDATE celox_c2c_transactions
+        SET transaction_status = ?, match_deadline = NULL,
+            awaiting_manual_review = ?, updated_at = ?
+        WHERE transaction_id = ?
+      `, [event.provider_status, event.awaiting_manual_review, now, row.transaction_id]);
+      // แยก "สำเร็จ/ไม่สำเร็จ" ด้วยยอดที่ปิดจริง ไม่ใช่ด้วยสถานะรวม: SUCCESS ที่ settledAmount = 0
+      // คือรายการที่ไม่มีเงินไหล ส่วน CANCELLED/EXPIRED ที่ settledAmount > 0 มีเงินไหลไปแล้วบางส่วน
+      if (settledSatang > 0) {
+        await finalizeC2CSuccess(t, closed, now, settledSatang);
+      } else {
+        await finalizeC2CFailure(t, closed, now, 0);
+      }
+      await finishCeloxC2CCallback(t, event, "applied", now, linked);
     }
 
     return await t.first<CeloxC2CCallbackRow>("SELECT * FROM celox_c2c_callback_events WHERE id = ?",

@@ -37,11 +37,19 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse(413, "Callback C2C มีขนาดใหญ่เกินกำหนด", "invalid_request");
   }
 
+  // ลายเซ็น v2 คุ้ม bytes ที่ส่งมาจริง จึงต้องเก็บ raw body ไว้ทั้งก้อนก่อน parse
+  // แล้วส่งสตริงเดิมนั้นไปตรวจ ห้าม re-serialise payload ที่ parse แล้วมา hash ซ้ำ
+  const rawText = rawBody.toString("utf8");
   let payload: unknown;
   try {
-    payload = JSON.parse(rawBody.toString("utf8")) as unknown;
+    payload = JSON.parse(rawText) as unknown;
   } catch {
     return errorResponse(400, "รูปแบบ JSON ของ Callback C2C ไม่ถูกต้อง", "invalid_request");
   }
-  return acceptCeloxC2CCallbackPayload(payload, request.headers.get("X-Celox-Signature"));
+  return acceptCeloxC2CCallbackPayload(
+    payload,
+    rawText,
+    request.headers.get("X-Celox-Timestamp"),
+    request.headers.get("X-Celox-Signature"),
+  );
 }

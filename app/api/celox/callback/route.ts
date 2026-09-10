@@ -49,14 +49,20 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse(413, "Callback มีขนาดใหญ่เกินกำหนด", "invalid_request");
   }
 
+  const rawText = rawBody.toString("utf8");
   let payload: unknown;
   try {
-    payload = JSON.parse(rawBody.toString("utf8")) as unknown;
+    payload = JSON.parse(rawText) as unknown;
   } catch {
     return errorResponse(400, "รูปแบบ JSON ของ Callback ไม่ถูกต้อง", "invalid_request");
   }
   if (looksLikeCeloxC2CCallback(payload)) {
-    return acceptCeloxC2CCallbackPayload(payload, request.headers.get("X-Celox-Signature"));
+    return acceptCeloxC2CCallbackPayload(
+      payload,
+      rawText,
+      request.headers.get("X-Celox-Timestamp"),
+      request.headers.get("X-Celox-Signature"),
+    );
   }
 
   try {
