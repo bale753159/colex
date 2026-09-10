@@ -223,6 +223,31 @@ export type CeloxC2CListResponse = {
   transactions: CeloxC2CListItem[];
 };
 
+// สรุป callback ที่ inbox ของเราได้รับจริงสำหรับรายการหนึ่ง ใช้บอกใน dialog ว่าเดินมาถึงขั้นไหนแล้ว
+// อ่านจากฐานข้อมูลของเราล้วน ๆ ไม่เรียก Celox จึง poll ถี่กว่า GET สถานะได้
+export type CeloxC2CCallbackStep = {
+  status: C2CTransactionStatus;
+  // pending = เพิ่งรับเข้า inbox · applied = ปรับยอดแล้ว · recorded = บันทึกสถานะแล้วแต่ยังไม่ขยับเงิน
+  // unmatched = ยังหารายการที่ผูกไม่เจอ · failed = ประมวลผลไม่สำเร็จ
+  processingState: CeloxCallbackProcessingState;
+  settledAmount: number;
+  unfilledAmount: number | null;
+  awaitingManualReview: boolean;
+  allPartsTerminal: boolean;
+  receivedCount: number;
+  receivedAt: string;
+  lastReceivedAt: string;
+  lastError: string | null;
+};
+
+export type CeloxC2CCallbackTimeline = {
+  found: boolean;
+  transactionId: string | null;
+  transactionStatus: C2CTransactionStatus | null;
+  updatedAt: string | null;
+  steps: CeloxC2CCallbackStep[];
+};
+
 export type SlipVerification =
   | {
       outcome: "match";

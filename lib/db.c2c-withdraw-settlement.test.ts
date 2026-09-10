@@ -7,12 +7,18 @@ import type { CeloxC2CCallbackRequest, C2CTransactionResponse } from "./celox/ty
 let syncCeloxC2CTransaction: typeof import("./db")["syncCeloxC2CTransaction"];
 let enqueueCeloxC2CCallbackEvent: typeof import("./db")["enqueueCeloxC2CCallbackEvent"];
 let processCeloxC2CCallbackEvent: typeof import("./db")["processCeloxC2CCallbackEvent"];
+let getCeloxC2CCallbackTimeline: typeof import("./db")["getCeloxC2CCallbackTimeline"];
 
 const FAKE_HASH = "a".repeat(64);
 
 beforeAll(async () => {
   await setupTestDatabase();
-  ({ syncCeloxC2CTransaction, enqueueCeloxC2CCallbackEvent, processCeloxC2CCallbackEvent } = await import("./db"));
+  ({
+    syncCeloxC2CTransaction,
+    enqueueCeloxC2CCallbackEvent,
+    processCeloxC2CCallbackEvent,
+    getCeloxC2CCallbackTimeline,
+  } = await import("./db"));
 });
 
 beforeEach(async () => {
@@ -376,5 +382,49 @@ describe("processCeloxC2CCallbackEvent money rules", () => {
     expect((await processCeloxC2CCallbackEvent(queuedReview.eventId)).processing_state).toBe("recorded");
     expect((await readC2CRow(review.transactionId)).awaiting_manual_review).toBe(true);
     expect(await readCustomer(review.customerId)).toEqual({ balance_satang: 20_000, withdrawable_satang: 10_000 });
+  });
+});
+
+describe("getCeloxC2CCallbackTimeline", () => {
+  it("reports the callbacks the inbox received, looked up by orderId or referenceId", async () => {
+    const seed = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
+    const payload = withdrawalCallback(seed, {
+      transactionStatus: "EXPIRED", settledAmount: 0, unfilledAmount: 100,
+      parts: [{ orderId: `${seed.orderId}-1`, amount: 100, feeAmount: 0, transactionStatus: "EXPIRED", matchDeadline: null, matchedAt: null, cancelReason: null }],
+    });
+    const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
+    await processCeloxC2CCallbackEvent(queued.eventId);
+
+    for (const reference of [seed.orderId, seed.referenceId, seed.transactionId]) {
+      const timeline = await getCeloxC2CCallbackTimeline(reference);
+      expect(timeline.found).toBe(true);
+      expect(timeline.transactionId).toBe(seed.transactionId);
+      expect(timeline.transactionStatus).toBe("EXPIRED");
+      expect(timeline.steps).toHaveLength(1);
+      expect(timeline.steps[0]).toMatchObject({
+        status: "EXPIRED",
+        processingState: "applied",
+        settledAmount: 0,
+        unfilledAmount: 100,
+        awaitingManualReview: false,
+        allPartsTerminal: true,
+        receivedCount: 1,
+      });
+    }
+  });
+
+  it("reports an empty timeline for an order that has had no callback yet", async () => {
+    const seed = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
+    const timeline = await getCeloxC2CCallbackTimeline(seed.orderId);
+    expect(timeline.found).toBe(true);
+    expect(timeline.transactionStatus).toBe("PENDING_TRANSFER");
+    expect(timeline.steps).toEqual([]);
+  });
+
+  it("reports found=false for a reference nothing is bound to", async () => {
+    const timeline = await getCeloxC2CCallbackTimeline("KLANG-C2C-WD-NOPE");
+    expect(timeline.found).toBe(false);
+    expect(timeline.transactionId).toBeNull();
+    expect(timeline.steps).toEqual([]);
   });
 });

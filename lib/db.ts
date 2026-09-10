@@ -7,6 +7,7 @@ import type {
   C2CTransactionStatus,
   CancelC2CTransactionResponse,
   CeloxC2CCallbackRequest,
+  CeloxC2CCallbackTimeline,
   CeloxCallbackEvent,
   CeloxCallbackProcessingState,
   CeloxCallbackRequest,
@@ -1982,6 +1983,50 @@ export async function processCeloxC2CCallbackEvent(eventId: number) {
     return await t.first<CeloxC2CCallbackRow>("SELECT * FROM celox_c2c_callback_events WHERE id = ?",
       [eventId]) as CeloxC2CCallbackRow;
   });
+}
+
+/**
+ * callback ที่ inbox ของเราได้รับจริงสำหรับรายการหนึ่ง เรียงตามเวลาที่รับเข้ามา
+ *
+ * อ่านจากฐานข้อมูลเราล้วน ๆ ไม่แตะ Celox — dialog จึง poll ตัวนี้ถี่ได้โดยไม่กิน rate limit
+ * และเห็น "ได้รับ callback แล้ว" ทันทีที่ webhook ลงถึงแม้การประมวลผลเบื้องหลังจะยังไม่จบ
+ */
+export async function getCeloxC2CCallbackTimeline(reference: string): Promise<CeloxC2CCallbackTimeline> {
+  const key = reference.trim();
+  if (!key) return { found: false, transactionId: null, transactionStatus: null, updatedAt: null, steps: [] };
+
+  const row = await db.first<CeloxC2CRow>(`
+    SELECT * FROM celox_c2c_transactions
+    WHERE transaction_id = ? OR order_id = ? OR reference_id = ?
+    LIMIT 1
+  `, [key, key, key]);
+
+  // ยังไม่มีแถวผูกก็ยังตอบ callback ที่ค้างอยู่ใน inbox ได้ ถ้า key ที่ส่งมาเป็น transactionId ตรง ๆ
+  const transactionId = row?.transaction_id ?? key;
+  const events = await db.query<CeloxC2CCallbackRow>(`
+    SELECT * FROM celox_c2c_callback_events
+    WHERE transaction_id = ?
+    ORDER BY received_at
+  `, [transactionId]);
+
+  return {
+    found: Boolean(row) || events.length > 0,
+    transactionId: row?.transaction_id ?? (events.length > 0 ? transactionId : null),
+    transactionStatus: row?.transaction_status ?? null,
+    updatedAt: row?.updated_at ?? null,
+    steps: events.map((event) => ({
+      status: event.provider_status,
+      processingState: event.processing_state,
+      settledAmount: toMoney(event.settled_amount_satang),
+      unfilledAmount: event.unfilled_amount_satang === null ? null : toMoney(event.unfilled_amount_satang),
+      awaitingManualReview: event.awaiting_manual_review,
+      allPartsTerminal: event.all_parts_terminal,
+      receivedCount: event.received_count,
+      receivedAt: event.received_at,
+      lastReceivedAt: event.last_received_at,
+      lastError: event.last_error,
+    })),
+  };
 }
 
 export async function markCeloxC2CCallbackEventFailed(eventId: number, error: string, attempts = 1) {

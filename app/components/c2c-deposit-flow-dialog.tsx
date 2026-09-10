@@ -26,6 +26,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import C2CCallbackFeed from "@/app/components/c2c-callback-feed";
 import { BANK_NAME_MAP } from "@/lib/celox/banks";
 import { c2cStatusDescription, c2cStatusLabel, c2cStatusTone } from "@/lib/celox/c2c-display";
 import type {
@@ -470,6 +471,7 @@ export default function C2CDepositFlowDialog({
             <div className="c2c-reference-strip"><span>Reference ID</span><strong>{deposit.referenceId || deposit.orderId}</strong></div>
             {deadline && <div className="c2c-deadline"><Clock3 size={16} /><span>รอจับคู่ถึง {dateTime.format(new Date(deadline))}</span></div>}
             <div className="deposit-clarification"><RefreshCcw size={18} /><span><strong>ไม่ต้องสร้างรายการใหม่</strong> หน้านี้ใช้ GET สถานะรายการเดิมซ้ำตามรอบ เพราะ callback ของ C2C จะไม่ถูกส่งซ้ำ</span></div>
+            {activeReference && <C2CCallbackFeed reference={activeReference} active={phase === "waiting"} />}
             {globalError && <div className="form-error" role="alert">{globalError}</div>}
             <div className="dialog-actions deposit-actions"><button className="button secondary-button" type="button" onClick={requestClose}>ปิดไว้ก่อน</button><button className="button danger-outline-button" type="button" onClick={() => void cancelDeposit()}>ยกเลิกรายการ</button></div>
           </div>
@@ -485,6 +487,7 @@ export default function C2CDepositFlowDialog({
             </section>
             <div className="privacy-notice"><ShieldAlert size={18} /><span><strong>ข้อมูลบัญชีของบุคคลที่สาม</strong> แสดงเฉพาะในขั้นตอนโอนรายการนี้และไม่ถูกบันทึกลงรายการที่ลูกค้าคนอื่นเห็น</span></div>
             <section className="slip-upload-section"><div className="slip-upload-heading"><div><h3>แนบสลิปหลังโอน</h3><p>หนึ่งไฟล์ และไม่มี field อื่นใน multipart</p></div><UploadCloud size={20} /></div><label className={`slip-dropzone ${dragging ? "dragging" : ""} ${file ? "has-preview" : ""}`} onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); selectFile(event.dataTransfer.files[0] ?? null); }}>{previewUrl ? <><div className="slip-preview-frame"><Image src={previewUrl} alt="ตัวอย่างสลิป C2C ที่เลือก" fill unoptimized /></div><span className="slip-preview-meta"><span className="file-symbol selected"><FileImage size={19} /></span><span><strong>{file?.name}</strong><small>{selectedFileLabel}</small></span></span></> : <><span className="file-symbol"><UploadCloud size={20} /></span><strong>เลือกหรือลากรูปสลิปมาวาง</strong><small>JPEG, PNG, WEBP, HEIC · ไม่เกิน 10 MB</small></>}<input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" onChange={(event) => selectFile(event.target.files?.[0] ?? null)} /></label></section>
+            {activeReference && <C2CCallbackFeed reference={activeReference} active={phase === "ready"} />}
             {copyStatus && <p className="copy-status" role="status">{copyStatus}</p>}
             {globalError && <div className="form-error" role="alert">{globalError}</div>}
             <div className="dialog-actions deposit-actions sticky"><button className="button secondary-button" type="button" onClick={requestClose} disabled={phase === "uploading"}>ปิดไว้ก่อน</button><button className="button deposit-button" type="button" onClick={() => void uploadSlip()} disabled={!file || phase === "uploading"}>{phase === "uploading" ? <><LoaderCircle className="spin" size={17} />กำลังตรวจสลิป…</> : <><UploadCloud size={17} />ส่งสลิปตรวจ</>}</button></div>
@@ -498,6 +501,7 @@ export default function C2CDepositFlowDialog({
             <dl className="result-details"><div><dt>สถานะ</dt><dd>{resultStatus ?? activeStatus}</dd></div><div><dt>Order ID</dt><dd>{slipResult?.orderId ?? deposit?.orderId ?? status?.orderId}</dd></div><div><dt>ผลตรวจสลิป</dt><dd>{slipResult?.slipVerification.outcome ?? "สถานะอัปเดตจาก Celox"}</dd></div><div><dt>ฝั่งคู่รายการ</dt><dd>{slipResult?.counterparty?.transactionStatus ?? (resultStatus === "SUCCESS" ? "SUCCESS" : "ไม่เปิดเผยข้อมูล")}</dd></div></dl>
             {resultStatus === "PENDING_APPROVE" && <div className="deposit-clarification warning"><ShieldAlert size={18} /><span><strong>ต้องรอเจ้าหน้าที่</strong> ชื่อหรือบัญชีบนสลิปตรงเพียงบางส่วน รายการยังไม่เพิ่มยอดจนกว่าจะสำเร็จ</span></div>}
             {retryableSlip && <div className="deposit-clarification warning"><AlertTriangle size={18} /><span><strong>สลิปไม่ผ่าน แต่รายการเดิมยังใช้ได้</strong> เลือกรูปใหม่แล้วแนบกับ transactionId เดิม ห้ามสร้างรายการฝากใหม่</span></div>}
+            {activeReference && <C2CCallbackFeed reference={activeReference} active={phase === "result" && resultStatus !== "SUCCESS"} />}
             <div className="dialog-actions deposit-actions">{retryableSlip && <button className="button secondary-button" type="button" onClick={() => { setFile(null); setGlobalError(""); setPhase("ready"); }}><RefreshCcw size={16} />แนบสลิปใหม่</button>}<button className="button deposit-button" type="button" onClick={requestClose}>ปิดหน้าต่าง</button></div>
           </div>
         )}

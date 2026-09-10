@@ -527,6 +527,26 @@ tbody tr:hover { background: oklch(0.975 0.008 85); }
 .c2c-result.neutral .state-symbol { color: var(--muted); background: var(--surface-strong); }
 .c2c-cancelled .state-symbol { color: var(--muted); background: var(--surface-strong); }
 
+/* ฟีด callback ที่ระบบได้รับจริงจาก Celox — บอกใน dialog ว่ารายการเดินมาถึงขั้นไหนแล้ว */
+.c2c-callback-feed { margin-top: 16px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); text-align: left; }
+.c2c-callback-feed > header { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 11px; }
+.c2c-callback-feed > header svg { flex: 0 0 auto; color: var(--primary-strong); }
+.c2c-callback-feed > header strong { font-size: 11px; }
+.c2c-callback-feed > header span { margin-left: auto; color: var(--muted); font-size: 10px; }
+.c2c-callback-empty { margin: 9px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.c2c-callback-steps { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.c2c-callback-steps li { display: flex; align-items: flex-start; gap: 9px; }
+.c2c-callback-steps li > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.c2c-callback-mark { flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; color: var(--primary-strong); background: var(--primary-soft); }
+.c2c-callback-steps li.state-applied .c2c-callback-mark { color: var(--success); background: var(--success-bg); }
+.c2c-callback-steps li.state-failed .c2c-callback-mark { color: var(--danger); background: var(--danger-bg); }
+.c2c-callback-steps li.state-unmatched .c2c-callback-mark { color: oklch(0.5 0.11 56); background: oklch(0.96 0.033 58); }
+.c2c-callback-steps strong { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.c2c-callback-steps time { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.c2c-callback-steps p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.c2c-callback-steps small { color: var(--ink-soft); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.c2c-callback-flag { color: oklch(0.5 0.11 56); }
+
 .c2c-page-heading { align-items: flex-start; }
 .c2c-lookup { width: min(520px, 48vw); }
 .c2c-lookup > label { margin-bottom: 6px; color: var(--muted); display: block; font-size: 10px; font-weight: 600; }
