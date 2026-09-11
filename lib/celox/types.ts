@@ -311,6 +311,27 @@ export type CeloxC2CCallbackResponse = {
   duplicate: boolean;
 };
 
+export type CeloxC2CCallbackStep = {
+  status: C2CTransactionStatus;
+  processingState: CeloxCallbackProcessingState;
+  settledAmount: number;
+  unfilledAmount: number | null;
+  awaitingManualReview: boolean;
+  allPartsTerminal: boolean;
+  receivedCount: number;
+  receivedAt: string;
+  lastReceivedAt: string;
+  lastError: string | null;
+};
+
+export type CeloxC2CCallbackTimeline = {
+  found: boolean;
+  transactionId: string | null;
+  transactionStatus: C2CTransactionStatus | null;
+  updatedAt: string | null;
+  steps: CeloxC2CCallbackStep[];
+};
+
 // Celox ignores the response body; the Route Handler still returns the typed
 // acknowledgement above with HTTP 200 so local tests and operators can inspect it.
 export type CeloxCallbackHttpResponse = {

@@ -8,6 +8,7 @@ import type {
   CancelC2CTransactionResponse,
   CeloxC2CCallbackRawLogItem,
   CeloxC2CCallbackRequest,
+  CeloxC2CCallbackTimeline,
   CeloxCallbackEvent,
   CeloxCallbackProcessingState,
   CeloxCallbackRequest,
@@ -197,6 +198,12 @@ type CeloxC2CCallbackRow = {
   last_received_at: string;
   processed_at: string | null;
 };
+
+type CeloxC2CCallbackStepRow = Pick<CeloxC2CCallbackRow,
+  "provider_status" | "processing_state" | "settled_amount_satang" | "unfilled_amount_satang"
+  | "awaiting_manual_review" | "all_parts_terminal" | "received_count" | "received_at"
+  | "last_received_at" | "last_error"
+>;
 
 function toMoney(satang: number) {
   return satang / 100;
@@ -1698,9 +1705,17 @@ export async function syncCeloxC2CTransaction(result: C2CTransactionResponse) {
   });
 }
 
-export async function listCeloxC2CTransactions(options: { search?: string; limit?: number } = {}) {
+export async function listCeloxC2CTransactions(
+  options: { search?: string; limit?: number; updatedAfter?: string } = {},
+) {
   const values: Array<string | number> = [];
   const conditions: string[] = [];
+  // >= ไม่ใช่ > เพราะ cursor ฝั่งหน้าจอคือ updated_at ที่เคยเห็นแล้ว หลาย row อาจอัปเดต ms เดียวกัน
+  // ยอมส่ง row เดิมซ้ำดีกว่าหลุด — ฝั่ง client merge ด้วย transactionId จึงเป็น idempotent
+  if (options.updatedAfter) {
+    conditions.push("x.updated_at >= ?");
+    values.push(options.updatedAfter);
+  }
   if (options.search?.trim()) {
     const search = `%${options.search.trim()}%`;
     // ILIKE ไม่ใช่ LIKE — เหตุผลอยู่ที่คอมเมนต์เหนือ listCustomers
@@ -2074,6 +2089,50 @@ export async function markCeloxC2CCallbackEventFailed(eventId: number, error: st
         last_error = ?, processed_at = ?
     WHERE id = ? AND processing_state NOT IN ('applied', 'recorded')
   `, [Math.max(1, attempts), message, new Date().toISOString(), eventId]);
+}
+
+/** Read our callback inbox only. This deliberately never calls Celox. */
+export async function getCeloxC2CCallbackTimeline(reference: string): Promise<CeloxC2CCallbackTimeline> {
+  const transaction = await db.first<Pick<CeloxC2CRow, "transaction_id" | "transaction_status" | "updated_at">>(`
+    SELECT transaction_id, transaction_status, updated_at
+    FROM celox_c2c_transactions
+    WHERE transaction_id = ? OR order_id = ? OR reference_id = ?
+    LIMIT 1
+  `, [reference, reference, reference]);
+
+  // A callback can win the race against creating its transaction row. In that case
+  // only a transaction id is safe to look up, as order/reference are not inbox keys.
+  const transactionId = transaction?.transaction_id ?? reference;
+  const steps = await db.query<CeloxC2CCallbackStepRow>(`
+    SELECT provider_status, processing_state, settled_amount_satang, unfilled_amount_satang,
+           awaiting_manual_review, all_parts_terminal, received_count, received_at,
+           last_received_at, last_error
+    FROM celox_c2c_callback_events
+    WHERE transaction_id = ?
+    ORDER BY received_at ASC
+  `, [transactionId]);
+
+  if (!transaction && steps.length === 0) {
+    return { found: false, transactionId: null, transactionStatus: null, updatedAt: null, steps: [] };
+  }
+  return {
+    found: true,
+    transactionId,
+    transactionStatus: transaction?.transaction_status ?? null,
+    updatedAt: transaction?.updated_at ?? null,
+    steps: steps.map((step) => ({
+      status: step.provider_status,
+      processingState: step.processing_state,
+      settledAmount: toMoney(step.settled_amount_satang),
+      unfilledAmount: step.unfilled_amount_satang === null ? null : toMoney(step.unfilled_amount_satang),
+      awaitingManualReview: step.awaiting_manual_review,
+      allPartsTerminal: step.all_parts_terminal,
+      receivedCount: step.received_count,
+      receivedAt: step.received_at,
+      lastReceivedAt: step.last_received_at,
+      lastError: step.last_error,
+    })),
+  };
 }
 
 function callbackPayloadMatches(row: CeloxCallbackRow, input: CeloxCallbackRequest, amountSatang: number) {

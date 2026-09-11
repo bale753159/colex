@@ -17,8 +17,11 @@ import {
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AppShell from "@/app/components/app-shell";
+import C2CCallbackFeed from "@/app/components/c2c-callback-feed";
 import C2CSlipUploadDialog from "@/app/components/c2c-slip-upload-dialog";
+import { C2C_CALLBACK_POLL_INTERVAL_MS } from "@/lib/celox/c2c-callback-poll";
 import { c2cStatusDescription, c2cStatusLabel, c2cStatusTone, isC2CTerminal } from "@/lib/celox/c2c-display";
+import { mergeC2CListDelta, nextC2CListCursor, patchC2CDetailFromListItem } from "@/lib/celox/c2c-list-delta";
 import type {
   C2CTransactionResponse,
   CancelC2CTransactionResponse,
@@ -52,6 +55,9 @@ function canAttachSlip(item: { direction: string; transactionStatus: string }) {
 export default function C2CTransactionsPage() {
   const listRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
+  // updated_at ล่าสุดที่หน้านี้เห็นแล้ว — delta poll ขอเฉพาะแถวที่ callback แก้หลังจากนี้
+  const listCursorRef = useRef<string | null>(null);
+  const itemsRef = useRef<CeloxC2CListItem[]>([]);
   const [search, setSearch] = useState("");
   const [lookup, setLookup] = useState("");
   const [items, setItems] = useState<CeloxC2CListItem[]>([]);
@@ -63,6 +69,9 @@ export default function C2CTransactionsPage() {
   const [detailError, setDetailError] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [slipTarget, setSlipTarget] = useState<C2CTransactionResponse | null>(null);
+  const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(() => new Set());
+
+  useEffect(() => { itemsRef.current = items; }, [items]);
 
   const loadList = useCallback(async (query = search) => {
     const requestId = listRequestRef.current + 1;
@@ -77,6 +86,7 @@ export default function C2CTransactionsPage() {
       if (!response.ok) throw new Error(result.error || "โหลดรายการ C2C ไม่สำเร็จ");
       if (listRequestRef.current !== requestId) return;
       setItems(result.transactions);
+      listCursorRef.current = nextC2CListCursor(result.transactions);
     } catch (error) {
       if (listRequestRef.current === requestId) {
         setLoadError(error instanceof Error ? error.message : "โหลดรายการ C2C ไม่สำเร็จ");
@@ -124,13 +134,51 @@ export default function C2CTransactionsPage() {
     return () => window.clearTimeout(timer);
   }, [checkReference, selectedReference]);
 
+  // ไม่ยิง GET ไป Celox อัตโนมัติ — สถานะบนหน้านี้ขยับตาม callback ที่ Celox ยิงเข้า DB ของเรา
+  // จึงใช้ยืนยันได้ว่า callback ฝั่ง Celox มาถึงและถูกต้อง (ปุ่ม "ตรวจสถานะล่าสุด" ยัง GET เองได้)
   useEffect(() => {
-    if (!detail || isC2CTerminal(detail.transactionStatus)) return;
-    const timer = window.setTimeout(() => {
-      void checkReference(detail.referenceId || detail.orderId, true);
-    }, 10_000);
-    return () => window.clearTimeout(timer);
-  }, [checkReference, detail]);
+    const controller = new AbortController();
+    let timer: number | undefined;
+    let flashTimer: number | undefined;
+
+    async function poll() {
+      // ถ้ามีการโหลดเต็ม (refresh/ค้นหา) แทรกระหว่างรอ ให้ทิ้ง delta รอบนี้ ไม่ merge ทับของใหม่
+      const generation = listRequestRef.current;
+      const cursor = listCursorRef.current;
+      const params = new URLSearchParams({ limit: "100" });
+      if (search.trim()) params.set("search", search.trim());
+      if (cursor) params.set("updatedAfter", cursor);
+      try {
+        const response = await fetch(`/api/celox/c2c?${params}`, { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error();
+        const result = await response.json() as CeloxC2CListResponse;
+        if (controller.signal.aborted) return;
+        if (listRequestRef.current === generation) {
+          const delta = result.transactions;
+          const merged = mergeC2CListDelta(itemsRef.current, delta);
+          if (merged.changedIds.length > 0) {
+            setItems(merged.items);
+            setChangedIds(new Set(merged.changedIds));
+            window.clearTimeout(flashTimer);
+            flashTimer = window.setTimeout(() => setChangedIds(new Set()), 2_500);
+          }
+          setDetail((current) => current ? delta.reduce(patchC2CDetailFromListItem, current) : current);
+          const next = nextC2CListCursor(delta);
+          if (next && (!cursor || next > cursor)) listCursorRef.current = next;
+        }
+      } catch {
+        // เงียบไว้ รอบหน้าลองใหม่ — หน้าจอมีปุ่มโหลดใหม่ให้อยู่แล้ว
+      }
+      if (!controller.signal.aborted) timer = window.setTimeout(() => void poll(), C2C_CALLBACK_POLL_INTERVAL_MS);
+    }
+
+    timer = window.setTimeout(() => void poll(), C2C_CALLBACK_POLL_INTERVAL_MS);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+      window.clearTimeout(flashTimer);
+    };
+  }, [search]);
 
   useEffect(() => {
     if (!selectedReference) return;
@@ -193,7 +241,7 @@ export default function C2CTransactionsPage() {
     <AppShell active="c2c" searchValue={search} onSearchChange={setSearch} searchPlaceholder="ค้นหาลูกค้า Order ID หรือ Reference ID">
       <div className="page-wrap c2c-page">
         <section className="page-heading c2c-page-heading">
-          <div><h1>รายการ C2C</h1><p>ติดตามสถานะฝาก–ถอนจาก Celox โดยใช้ GET เป็นข้อมูลอ้างอิงล่าสุด</p></div>
+          <div><h1>รายการ C2C</h1><p>สถานะบนหน้านี้ขยับตาม callback ที่ Celox ยิงกลับมา โดยไม่ต้องรีเฟรช</p></div>
           <form className="c2c-lookup" onSubmit={handleLookup} role="search"><label htmlFor="c2c-reference-lookup">ตรวจรายการด้วย Order ID หรือ Reference ID</label><div><Search size={17} /><input id="c2c-reference-lookup" value={lookup} onChange={(event) => setLookup(event.target.value)} placeholder="เช่น ORDER-9001" /><button className="button deposit-button" type="submit" disabled={!lookup.trim() || detailLoading}>{detailLoading ? <LoaderCircle className="spin" size={16} /> : <Eye size={16} />}ตรวจสถานะ</button></div></form>
         </section>
 
@@ -218,7 +266,8 @@ export default function C2CTransactionsPage() {
                 {items.map((item) => {
                   const reference = referenceOf(item);
                   const DirectionIcon = item.direction === "deposit" ? ArrowDownLeft : ArrowUpRight;
-                  return <button key={item.transactionId} className={selectedReference === reference ? "selected" : ""} onClick={() => setSelectedReference(reference)}><span className={`c2c-direction ${item.direction}`}><DirectionIcon size={17} /></span><span className="c2c-row-main"><strong>{item.customerName}</strong><small>{item.orderId} · {item.customerAccount}</small></span><span className="c2c-row-meta"><strong>{currency.format(item.amount)}</strong><small className={`c2c-status ${c2cStatusTone(item.transactionStatus)}`}>{c2cStatusLabel(item.transactionStatus)}</small></span></button>;
+                  const rowClass = [selectedReference === reference && "selected", changedIds.has(item.transactionId) && "updated"].filter(Boolean).join(" ");
+                  return <button key={item.transactionId} className={rowClass} onClick={() => setSelectedReference(reference)}><span className={`c2c-direction ${item.direction}`}><DirectionIcon size={17} /></span><span className="c2c-row-main"><strong>{item.customerName}</strong><small>{item.orderId} · {item.customerAccount}</small></span><span className="c2c-row-meta"><strong>{currency.format(item.amount)}</strong><small className={`c2c-status ${c2cStatusTone(item.transactionStatus)}`}>{c2cStatusLabel(item.transactionStatus)}</small></span></button>;
                 })}
               </div>
             )}
@@ -245,6 +294,7 @@ export default function C2CTransactionsPage() {
                 {detail.awaitingManualReview && <div className="c2c-manual-alert"><ShieldAlert size={19} /><span><strong>รายการนี้รอเจ้าหน้าที่โดยไม่มีเวลาปลดอัตโนมัติ</strong> ยอดที่ค้างยังถูกกันไว้ {currency.format(detail.heldAmount)}</span></div>}
                 <dl className="c2c-detail-facts"><div><dt>ค่าธรรมเนียมรวม</dt><dd>{currency.format(detail.feeAmount)}</dd></div><div><dt>ยอดที่จบจริง</dt><dd>{currency.format(detail.settledAmount)}</dd></div><div><dt>ยอดที่ต้องคืนลูกค้า</dt><dd>{detail.unfilledAmount === null ? "ไม่ใช้กับฝั่งฝาก" : currency.format(detail.unfilledAmount)}</dd></div><div><dt>ยอดที่ยังถูกกัน</dt><dd>{currency.format(detail.heldAmount)}</dd></div><div><dt>เส้นตายที่ยังเดิน</dt><dd>{detail.matchDeadline ? dateTime.format(new Date(detail.matchDeadline)) : "ไม่มี"}</dd></div><div><dt>บัญชีปลายทาง</dt><dd>{detail.direction === "withdraw" ? "ไม่เปิดเผยสำหรับฝั่งถอน" : detail.transferTo ? "พร้อมสำหรับผู้โอนรายการนี้" : "ยังไม่จับคู่"}</dd></div><div><dt>Transaction ID</dt><dd>{detail.transactionId}</dd></div></dl>
                 <section className="c2c-parts" aria-labelledby="c2c-parts-title"><header><h3 id="c2c-parts-title">ส่วนของรายการ</h3><span>{detail.parts.length} ส่วน</span></header><div className="c2c-parts-table" role="table"><div className="c2c-parts-head" role="row"><span>Order ID</span><span>ยอด / ค่าธรรมเนียม</span><span>สถานะ</span></div>{detail.parts.map((part) => <div className="c2c-part-row" role="row" key={part.orderId}><span><strong>{part.orderId}</strong><small>{part.matchedAt ? `จับคู่ ${dateTime.format(new Date(part.matchedAt))}` : part.matchDeadline ? `รอถึง ${dateTime.format(new Date(part.matchDeadline))}` : part.cancelReason || "ไม่มีเวลาที่เดินอยู่"}</small></span><span><strong>{currency.format(part.amount)}</strong><small>ค่าธรรมเนียม {currency.format(part.feeAmount)}</small></span><span className={`c2c-status ${c2cStatusTone(part.transactionStatus)}`}>{c2cStatusLabel(part.transactionStatus)}</span></div>)}</div></section>
+                <div className="c2c-detail-feed"><C2CCallbackFeed reference={detail.transactionId} active={!isC2CTerminal(detail.transactionStatus)} /></div>
                 <div className="c2c-detail-actions"><button className="button secondary-button" onClick={() => void checkReference(detail.referenceId || detail.orderId)} disabled={detailLoading}><RefreshCcw className={detailLoading ? "spin" : ""} size={16} />ตรวจสถานะล่าสุด</button>{canAttachSlip(detail) && <button className="button deposit-button" onClick={() => setSlipTarget(detail)}><UploadCloud size={16} />แนบสลิป</button>}{detail.transactionStatus === "PENDING" && <button className="button danger-outline-button" onClick={() => void cancelSelected()} disabled={cancelling}>{cancelling ? <LoaderCircle className="spin" size={16} /> : <XCircle size={16} />}ยกเลิกรายการ</button>}</div>
               </>
             )}
@@ -263,7 +313,7 @@ export default function C2CTransactionsPage() {
           />
         )}
 
-        <div className="c2c-authority-note"><CheckCircle2 size={18} /><span><strong>สถานะจาก GET คือข้อมูลอ้างอิงหลัก</strong> ระบบ poll เฉพาะรายการที่กำลังเปิดดูทุก 10 วินาที เพื่อลดการชน rate limit และไม่พึ่ง callback เพียงครั้งเดียว</span></div>
+        <div className="c2c-authority-note"><CheckCircle2 size={18} /><span><strong>หน้านี้อัปเดตตาม callback จาก Celox</strong> ระบบอ่านสถานะที่ callback เขียนไว้ในระบบเราทุก 4 วินาที ไม่ยิง GET ไป Celox เอง — กด “ตรวจสถานะล่าสุด” เมื่อต้องการเทียบกับ GET</span></div>
       </div>
     </AppShell>
   );
