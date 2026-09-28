@@ -436,6 +436,7 @@ function isCreateC2CDepositResponse(
     && value.amount === input.amount
     && transferToValid
     && isNullableIsoDate(value.matchDeadline)
+    && (value.payUrl === undefined || isNullableString(value.payUrl))
     && (value.transactionStatus !== "PENDING_TRANSFER" || value.transferTo !== null);
 }
 

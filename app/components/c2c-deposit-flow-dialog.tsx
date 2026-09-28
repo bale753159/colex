@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Clock3,
   Copy,
+  ExternalLink,
   FileImage,
   Hourglass,
   LoaderCircle,
@@ -46,6 +47,7 @@ type Phase =
   | "review"
   | "creating"
   | "waiting"
+  | "paying"
   | "ready"
   | "uploading"
   | "result"
@@ -84,6 +86,17 @@ const ACCEPTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/
 
 function makeReference() {
   return `KLANG-C2C-DP-${Date.now().toString(36).toUpperCase()}`;
+}
+
+// payUrl มาจาก Celox และถูกฝังเป็น iframe จึงรับเฉพาะ https เท่านั้น ถ้าไม่ผ่านจะกลับไปใช้หน้าแนบสลิปเดิม
+function safePayUrl(value: string | null | undefined) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function errorMessage(error: CeloxErrorResponse) {
@@ -143,6 +156,7 @@ export default function C2CDepositFlowDialog({
     ?? deposit?.transactionStatus
     ?? "PENDING";
   const activeReference = deposit?.referenceId || deposit?.orderId;
+  const payUrl = safePayUrl(deposit?.payUrl);
   const amount = requestBody?.amount ?? deposit?.amount ?? 0;
 
   useEffect(() => {
@@ -166,7 +180,7 @@ export default function C2CDepositFlowDialog({
   }, []);
 
   useEffect(() => {
-    if (phase !== "waiting" || !activeReference) return;
+    if ((phase !== "waiting" && phase !== "paying") || !activeReference) return;
     const controller = new AbortController();
     const attempt = pollAttemptRef.current;
     const delay = Math.min(15_000, 5_000 + attempt * 2_500);
@@ -188,7 +202,7 @@ export default function C2CDepositFlowDialog({
         }
         setStatus(result);
         pollAttemptRef.current = 0;
-        if (result.transactionStatus === "PENDING_TRANSFER" && result.transferTo) {
+        if (phase === "waiting" && result.transactionStatus === "PENDING_TRANSFER" && result.transferTo) {
           setPhase("ready");
           setPollMessage("จับคู่แล้ว พร้อมให้ผู้ใช้โอนเงินและแนบสลิป");
           onChangedRef.current();
@@ -201,6 +215,12 @@ export default function C2CDepositFlowDialog({
         }
         if (result.transactionStatus === "CANCELLED") {
           setPhase("cancelled");
+          onChangedRef.current();
+          return;
+        }
+        // หน้า payUrl จัดการโอนและแนบสลิปเอง ฝั่งเราแค่รอผลสุดท้ายแล้วปิด iframe
+        if (phase === "paying" && result.transactionStatus === "EXPIRED") {
+          setPhase("result");
           onChangedRef.current();
           return;
         }
@@ -291,7 +311,7 @@ export default function C2CDepositFlowDialog({
       setDeposit(result);
       setStatus(null);
       pollAttemptRef.current = 0;
-      setPhase(result.transferTo ? "ready" : "waiting");
+      setPhase(safePayUrl(result.payUrl) ? "paying" : result.transferTo ? "ready" : "waiting");
       onChanged();
     } catch {
       setGlobalError("การเชื่อมต่อขาดหลังส่งคำขอ รายการอาจถูกสร้างแล้ว ห้ามกดสร้างซ้ำ");
@@ -398,10 +418,10 @@ export default function C2CDepositFlowDialog({
 
   const step = ["form", "review", "creating", "error", "uncertain"].includes(phase)
     ? 1
-    : ["waiting", "ready", "uploading"].includes(phase) ? 2 : 3;
+    : ["waiting", "paying", "ready", "uploading"].includes(phase) ? 2 : 3;
   const title = step === 1
     ? phase === "review" || phase === "creating" ? "ตรวจสอบรายการฝาก C2C" : "ฝากเงินแบบ C2C"
-    : step === 2 ? phase === "waiting" ? "รอจับคู่ C2C" : "โอนเงินและแนบสลิป"
+    : step === 2 ? phase === "waiting" ? "รอจับคู่ C2C" : phase === "paying" ? "ชำระเงินฝาก C2C" : "โอนเงินและแนบสลิป"
       : "ผลรายการฝาก C2C";
   const deadline = status?.matchDeadline ?? deposit?.matchDeadline;
   const resultStatus = slipResult?.transactionStatus ?? status?.transactionStatus ?? cancelResult?.transactionStatus;
@@ -416,7 +436,7 @@ export default function C2CDepositFlowDialog({
       onCancel={(event) => { event.preventDefault(); requestClose(); }}
       onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}
     >
-      <section className="transaction-dialog celox-deposit-dialog c2c-dialog" aria-busy={busy}>
+      <section className={`transaction-dialog celox-deposit-dialog c2c-dialog ${phase === "paying" ? "paying" : ""}`} aria-busy={busy}>
         <header className="dialog-header deposit-dialog-header">
           <div><span className="dialog-icon c2c"><ArrowDownLeft size={20} /></span><div><h2 ref={headingRef} id="c2c-deposit-title" tabIndex={-1}>{title}</h2><p>{deposit ? `${deposit.orderId} · ${currency.format(amount)}` : `${customer.name} · ${customer.account}`}</p></div></div>
           <button className="icon-button" type="button" onClick={requestClose} aria-label="ปิด" disabled={busy}><X size={20} /></button>
@@ -474,6 +494,21 @@ export default function C2CDepositFlowDialog({
             <C2CCallbackFeed reference={deposit.transactionId} active />
             {globalError && <div className="form-error" role="alert">{globalError}</div>}
             <div className="dialog-actions deposit-actions"><button className="button secondary-button" type="button" onClick={requestClose}>ปิดไว้ก่อน</button><button className="button danger-outline-button" type="button" onClick={() => void cancelDeposit()}>ยกเลิกรายการ</button></div>
+          </div>
+        )}
+
+        {phase === "paying" && deposit && payUrl && (
+          <div className="c2c-pay-panel">
+            <div className="transfer-status-row"><span className="pending-badge"><Hourglass size={14} />{c2cStatusLabel(activeStatus)}</span><a className="c2c-pay-external" href={payUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} />เปิดในแท็บใหม่</a></div>
+            <iframe
+              className="c2c-pay-frame"
+              src={payUrl}
+              title={`หน้าชำระเงิน C2C ${deposit.orderId}`}
+              allow="clipboard-write"
+              referrerPolicy="no-referrer"
+            />
+            {globalError && <div className="form-error" role="alert">{globalError}</div>}
+            <div className="dialog-actions deposit-actions"><button className="button secondary-button" type="button" onClick={requestClose}>ปิดไว้ก่อน</button>{activeStatus === "PENDING" && <button className="button danger-outline-button" type="button" onClick={() => void cancelDeposit()}>ยกเลิกรายการ</button>}</div>
           </div>
         )}
 

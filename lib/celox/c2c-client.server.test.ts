@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { attachC2CDepositSlip, checkC2CTransaction, createC2CWithdrawal } from "./c2c-client.server";
-import type { CreateC2CWithdrawalRequest } from "./types";
+import { attachC2CDepositSlip, checkC2CTransaction, createC2CDeposit, createC2CWithdrawal } from "./c2c-client.server";
+import type { CreateC2CDepositRequest, CreateC2CWithdrawalRequest } from "./types";
 
 function transactionFixture(overrides: Record<string, unknown> = {}) {
   return {
@@ -46,6 +46,45 @@ afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.CELOX_CLIENT_ID;
   delete process.env.CELOX_CLIENT_SECRET;
+});
+
+describe("createC2CDeposit", () => {
+  const input: CreateC2CDepositRequest = {
+    amount: 50,
+    sourceBankCode: "004",
+    sourceAccountName: "ทดสอบ ระบบ",
+    sourceAccountNo: "1234567890",
+    matchTtlSeconds: 600,
+    referenceId: "KLANG-C2C-DP-TEST",
+  };
+  const depositFixture = (overrides: Record<string, unknown> = {}) => ({
+    transactionId: randomUUID(),
+    orderId: "DEP-C2C-1790598826202-OmMX9",
+    referenceId: input.referenceId,
+    transactionStatus: "PENDING",
+    amount: 50,
+    transferTo: null,
+    matchDeadline: "2026-09-28T12:34:46.198Z",
+    ...overrides,
+  });
+
+  it("ส่ง payUrl ของ Celox ต่อให้หน้าบ้านเอาไปฝังเป็น iframe", async () => {
+    const payUrl = "https://pay-stg.celox.app/pay/c2c?id=abc&t=def";
+    stubFetchJson(depositFixture({ payUrl }), 201);
+    const result = await createC2CDeposit(input);
+    expect(result.payUrl).toBe(payUrl);
+  });
+
+  it("ยังรับ response ที่ไม่มี payUrl", async () => {
+    stubFetchJson(depositFixture(), 201);
+    const result = await createC2CDeposit(input);
+    expect(result.payUrl).toBeUndefined();
+  });
+
+  it("rejects a payUrl that is not a string", async () => {
+    stubFetchJson(depositFixture({ payUrl: 123 }), 201);
+    await expect(createC2CDeposit(input)).rejects.toMatchObject({ code: "invalid_response" });
+  });
 });
 
 describe("checkC2CTransaction", () => {

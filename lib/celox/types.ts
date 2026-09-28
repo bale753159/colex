@@ -109,6 +109,8 @@ export type CreateC2CDepositResponse = {
   amount: number;
   transferTo: C2CTransferTo | null;
   matchDeadline: string | null;
+  // หน้าชำระเงินของ Celox (ฝังเป็น iframe) — จัดการจับคู่ โอน และแนบสลิปให้เอง
+  payUrl?: string | null;
 };
 
 export type C2CSlipVerification = {
