@@ -4,6 +4,7 @@ import {
   ArrowLeftRight,
   Bell,
   ChevronDown,
+  FileClock,
   LayoutDashboard,
   Menu,
   ReceiptText,
@@ -16,7 +17,7 @@ import BrandMark from "./brand-mark";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 type AppShellProps = {
-  active: "overview" | "transactions" | "c2c" | "customers";
+  active: "overview" | "transactions" | "c2c" | "customers" | "callback-logs";
   searchValue: string;
   onSearchChange: (value: string) => void;
   searchPlaceholder?: string;
@@ -27,6 +28,7 @@ const navItems = [
   { id: "overview", label: "ภาพรวม", href: "/", icon: LayoutDashboard },
   { id: "transactions", label: "ธุรกรรม", href: "/#transactions", icon: ReceiptText },
   { id: "c2c", label: "รายการ C2C", href: "/c2c-transactions", icon: ArrowLeftRight },
+  { id: "callback-logs", label: "Log Callback C2C", href: "/c2c-callback-logs", icon: FileClock },
   { id: "customers", label: "ลูกค้า", href: "/customers", icon: Users },
 ] as const;
 

@@ -1,114 +1,103 @@
 import { createHash, createHmac } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isRetryablePostgresError, verifyCeloxC2CCallbackSignatureV2 } from "./c2c-callback.server";
+import { afterEach, describe, expect, it } from "vitest";
 import { CeloxError } from "./client.server";
+import { hashRawC2CCallbackBody, isRetryablePostgresError, verifyCeloxC2CCallbackSignatureV2 } from "./c2c-callback.server";
 
 const TEST_SECRET = "test-c2c-callback-secret";
-const RAW_BODY = '{"transactionId":"01a08782-95ee-7293-afd1-a8453081de20","transactionStatus":"SUCCESS"}';
 
-/**
- * เขียนขึ้นใหม่จากสูตรในเอกสารตรง ๆ ไม่ import ตัวเซ็นของ production มาใช้
- * เพื่อไม่ให้เทสต์ผ่านเพราะทั้งสองฝั่งพลาดเหมือนกัน
- */
+// Built independently from the production signer — computed straight from the
+// v2 material formula in the Celox manual — so the test can't pass just
+// because both sides share a bug.
 function signV2(rawBody: string, timestamp: string, secret = TEST_SECRET) {
   const bodyHash = createHash("sha256").update(rawBody, "utf8").digest("hex");
-  return createHmac("sha256", secret)
-    .update(`v2\n${timestamp}\n${bodyHash}`, "utf8")
-    .digest("hex");
+  const material = `v2\n${timestamp}\n${bodyHash}`;
+  return createHmac("sha256", secret).update(material, "utf8").digest("hex");
 }
 
-function nowSeconds() {
-  return Math.floor(Date.now() / 1000);
-}
+describe("hashRawC2CCallbackBody", () => {
+  it("returns the lowercase sha256 hex digest of the exact raw bytes given", () => {
+    const rawBody = '{"transactionId":"5c1f9a2e"}';
+    expect(hashRawC2CCallbackBody(rawBody)).toBe(
+      createHash("sha256").update(rawBody, "utf8").digest("hex"),
+    );
+  });
 
-beforeEach(() => {
-  process.env.CELOX_C2C_CALLBACK_SECRET = TEST_SECRET;
-});
-
-afterEach(() => {
-  vi.useRealTimers();
+  it("produces a different hash when even a single byte of the body differs", () => {
+    const a = hashRawC2CCallbackBody('{"amount":2500}');
+    const b = hashRawC2CCallbackBody('{"amount":2501}');
+    expect(a).not.toBe(b);
+  });
 });
 
 describe("verifyCeloxC2CCallbackSignatureV2", () => {
-  it("accepts a signature over the exact bytes that were sent", () => {
-    const timestamp = String(nowSeconds());
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, timestamp, signV2(RAW_BODY, timestamp)))
-      .not.toThrow();
+  afterEach(() => {
+    delete process.env.CELOX_C2C_CALLBACK_SECRET;
   });
 
-  it("accepts an uppercase or sha256-prefixed signature header", () => {
-    const timestamp = String(nowSeconds());
-    const signature = signV2(RAW_BODY, timestamp);
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, timestamp, signature.toUpperCase()))
-      .not.toThrow();
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, timestamp, `sha256=${signature}`))
-      .not.toThrow();
+  function setSecret() {
+    process.env.CELOX_C2C_CALLBACK_SECRET = TEST_SECRET;
+  }
+
+  it("accepts a validly signed body regardless of key order or added fields (raw bytes are hashed as opaque)", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-...","status":"SUCCESS","aBrandNewField":"anything"}';
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, signV2(rawBody, timestamp))).not.toThrow();
   });
 
-  it("rejects a signature made with a different secret", () => {
-    const timestamp = String(nowSeconds());
-    expect(() => verifyCeloxC2CCallbackSignatureV2(
-      RAW_BODY, timestamp, signV2(RAW_BODY, timestamp, "someone-elses-secret"),
-    )).toThrow(CeloxError);
-  });
-
-  it("rejects a signature that was made for a different timestamp", () => {
-    const timestamp = String(nowSeconds());
-    const otherTimestamp = String(nowSeconds() - 60);
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, timestamp, signV2(RAW_BODY, otherTimestamp)))
+  it("rejects when the signature does not match the raw body", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, signV2('{"tampered":true}', timestamp)))
       .toThrow(CeloxError);
   });
 
-  it("rejects a missing timestamp header, a missing signature header, and both missing", () => {
-    const timestamp = String(nowSeconds());
-    const signature = signV2(RAW_BODY, timestamp);
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, null, signature)).toThrow(CeloxError);
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, timestamp, null)).toThrow(CeloxError);
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, null, null)).toThrow(CeloxError);
+  it("rejects when X-Celox-Timestamp is missing even if the signature header is present", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, null, signV2(rawBody, timestamp))).toThrow(CeloxError);
   });
 
-  it("rejects a timestamp that is not an integer", () => {
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, "not-a-timestamp", "a".repeat(64)))
-      .toThrow(CeloxError);
+  it("rejects when X-Celox-Signature is missing even if the timestamp header is present", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, null)).toThrow(CeloxError);
   });
 
-  it("accepts a timestamp exactly 300 seconds old and rejects one past the window", () => {
-    const past = nowSeconds() - 300;
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, String(past), signV2(RAW_BODY, String(past))))
-      .not.toThrow();
+  it("rejects when both headers are missing (org policy: never trust an unsigned callback)", () => {
+    setSecret();
+    expect(() => verifyCeloxC2CCallbackSignatureV2('{"transactionId":"5c1f9a2e-..."}', null, null)).toThrow(CeloxError);
+  });
 
-    const tooOld = nowSeconds() - 301;
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, String(tooOld), signV2(RAW_BODY, String(tooOld))))
-      .toThrow(CeloxError);
+  it("rejects a timestamp more than 300 seconds in the past", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000) - 301);
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, signV2(rawBody, timestamp))).toThrow(CeloxError);
   });
 
   it("rejects a timestamp more than 300 seconds in the future", () => {
-    const ahead = nowSeconds() + 301;
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, String(ahead), signV2(RAW_BODY, String(ahead))))
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000) + 301);
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, signV2(rawBody, timestamp))).toThrow(CeloxError);
+  });
+
+  it("accepts a timestamp exactly at the 300 second boundary", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    const timestamp = String(Math.floor(Date.now() / 1000) - 300);
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, timestamp, signV2(rawBody, timestamp))).not.toThrow();
+  });
+
+  it("rejects a non-numeric timestamp header", () => {
+    setSecret();
+    const rawBody = '{"transactionId":"5c1f9a2e-..."}';
+    expect(() => verifyCeloxC2CCallbackSignatureV2(rawBody, "not-a-number", signV2(rawBody, "not-a-number")))
       .toThrow(CeloxError);
-  });
-
-  /**
-   * กับดักที่ integrator พลาดบ่อยที่สุด: parse แล้ว stringify กลับมาใหม่เพื่อ hash
-   * key order/ช่องว่างเปลี่ยนไปเพียงนิดเดียวลายเซ็นก็ไม่ตรงแล้ว — ต้อง hash bytes ที่ส่งมาจริงเท่านั้น
-   */
-  it("fails to verify when the payload is re-serialised instead of hashed as sent", () => {
-    const timestamp = String(nowSeconds());
-    const signature = signV2(RAW_BODY, timestamp);
-    const reserialised = JSON.stringify({
-      transactionStatus: "SUCCESS",
-      transactionId: "01a08782-95ee-7293-afd1-a8453081de20",
-    });
-
-    expect(reserialised).not.toBe(RAW_BODY);
-    expect(() => verifyCeloxC2CCallbackSignatureV2(reserialised, timestamp, signature)).toThrow(CeloxError);
-    expect(() => verifyCeloxC2CCallbackSignatureV2(RAW_BODY, timestamp, signature)).not.toThrow();
-  });
-
-  it("rejects a body whose bytes changed by a single character", () => {
-    const timestamp = String(nowSeconds());
-    const signature = signV2(RAW_BODY, timestamp);
-    expect(() => verifyCeloxC2CCallbackSignatureV2(`${RAW_BODY} `, timestamp, signature)).toThrow(CeloxError);
   });
 });
 

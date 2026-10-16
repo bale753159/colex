@@ -7,17 +7,18 @@ afterAll(async () => { await teardownTestDatabase(); });
 
 // จำนวนตาราง/index/FK ด้านล่างมาจากการนับจริงกับ catalog ของ migration ที่โหลดแล้ว
 // (ไม่ใช่นับด้วยตาเปล่า) ดูคำสั่งและผลลัพธ์ที่ใช้ยืนยันตัวเลขเหล่านี้ใน task-2-report.md
-const EXPECTED_TABLE_COUNT = 10;
-const EXPECTED_EXPLICIT_INDEX_COUNT = 18; // เฉพาะ CREATE INDEX ที่ตั้งชื่อ idx_* เอง ไม่รวม index ที่ Postgres สร้างอัตโนมัติให้ PRIMARY KEY/UNIQUE
+const EXPECTED_TABLE_COUNT = 11;
+const EXPECTED_EXPLICIT_INDEX_COUNT = 19; // เฉพาะ CREATE INDEX ที่ตั้งชื่อ idx_* เอง ไม่รวม index ที่ Postgres สร้างอัตโนมัติให้ PRIMARY KEY/UNIQUE
 const EXPECTED_FOREIGN_KEY_COUNT = 15;
 
 describe("schema", () => {
-  it("สร้างตารางครบทั้ง 10 ตาราง", async () => {
+  it("สร้างตารางครบทั้ง 11 ตาราง", async () => {
     const rows = await db.query<{ table_name: string }>(
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name");
     const tableNames = rows.map((r) => r.table_name).sort();
     expect(tableNames).toEqual([
       "celox_c2c_callback_events",
+      "celox_c2c_callback_raw_logs",
       "celox_c2c_transactions",
       "celox_c2c_withdrawal_reservations",
       "celox_callback_events",
@@ -99,14 +100,15 @@ describe("schema", () => {
     }
   });
 
-  it("คอลัมน์ boolean ทุกตัวเป็น boolean และ default เป็น false", async () => {
+  it("คอลัมน์ boolean ทั้ง 6 ตัวเป็น boolean และ default เป็น false", async () => {
     const booleanColumns = [
       { table_name: "celox_withdrawals", column_name: "funds_reserved" },
       { table_name: "celox_c2c_transactions", column_name: "funds_reserved" },
       { table_name: "celox_c2c_transactions", column_name: "awaiting_manual_review" },
       { table_name: "celox_c2c_callback_events", column_name: "has_transfer_to" },
-      { table_name: "celox_c2c_callback_events", column_name: "awaiting_manual_review" },
+      // สรุปจาก parts[] และ awaitingManualReview ของ callback C2C contract ใหม่
       { table_name: "celox_c2c_callback_events", column_name: "all_parts_terminal" },
+      { table_name: "celox_c2c_callback_events", column_name: "awaiting_manual_review" },
     ];
     const rows = await db.query<{ table_name: string; column_name: string; data_type: string; column_default: string | null }>(`
       SELECT table_name, column_name, data_type, column_default FROM information_schema.columns

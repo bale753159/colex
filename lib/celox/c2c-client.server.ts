@@ -2,8 +2,8 @@ import "server-only";
 
 import { createHash, createHmac } from "node:crypto";
 import { CeloxError } from "./client.server";
-import { isValidC2CUploadToken } from "./c2c-validation";
 import { isC2CTransactionResponse } from "./c2c-callback-validation";
+import { isValidC2CUploadToken } from "./c2c-validation";
 import type {
   C2CAttachSlipOptions,
   C2CDepositSlipResponse,
@@ -436,6 +436,7 @@ function isCreateC2CDepositResponse(
     && value.amount === input.amount
     && transferToValid
     && isNullableIsoDate(value.matchDeadline)
+    && (value.payUrl === undefined || isNullableString(value.payUrl))
     && (value.transactionStatus !== "PENDING_TRANSFER" || value.transferTo !== null);
 }
 

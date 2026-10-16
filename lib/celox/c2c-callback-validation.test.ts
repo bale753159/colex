@@ -1,182 +1,207 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { areAllC2CPartsTerminal, isCeloxC2CCallbackRequest } from "./c2c-callback-validation";
+import { isC2CTransactionResponse, isCeloxC2CCallbackRequest } from "./c2c-callback-validation";
 
-function withdrawalBody(overrides: Record<string, unknown> = {}) {
+// contract ใหม่: body ของ callback C2C เหมือน body ของ GET /v1/core/c2c/{reference}
+// แบบ field ต่อ field จึง validate ด้วยฟังก์ชันตัวเดียวกันทั้งสองทาง
+function part(overrides: Record<string, unknown> = {}) {
+  return {
+    orderId: "TXN-2608-00993-1",
+    amount: 2500,
+    feeAmount: 37.5,
+    transactionStatus: "PENDING_TRANSFER",
+    matchDeadline: null,
+    matchedAt: null,
+    cancelReason: null,
+    ...overrides,
+  };
+}
+
+function basePayload(overrides: Record<string, unknown> = {}) {
   return {
     transactionId: randomUUID(),
     orderId: "TXN-2608-00993",
     referenceId: "ORDER-4471",
     direction: "withdraw",
-    transactionStatus: "SUCCESS",
-    amount: 250,
-    feeAmount: 5,
-    settledAmount: 100,
-    heldAmount: 0,
-    unfilledAmount: 150,
+    transactionStatus: "PENDING_TRANSFER",
+    amount: 2500,
+    feeAmount: 37.5,
+    settledAmount: 0,
+    heldAmount: 37.5,
+    unfilledAmount: 0,
     awaitingManualReview: false,
     matchDeadline: null,
     transferTo: null,
-    parts: [{
-      orderId: "TXN-2608-00993-1",
-      amount: 100,
-      feeAmount: 5,
-      transactionStatus: "SUCCESS",
-      matchDeadline: null,
-      matchedAt: "2026-08-30T10:05:12.000Z",
-      cancelReason: null,
-    }],
+    parts: [part()],
     ...overrides,
   };
 }
 
-function depositBody(overrides: Record<string, unknown> = {}) {
-  return withdrawalBody({
+function depositPayload(overrides: Record<string, unknown> = {}) {
+  return basePayload({
     direction: "deposit",
-    transactionStatus: "PENDING_TRANSFER",
-    settledAmount: 0,
     unfilledAmount: null,
     transferTo: {
-      bankCode: "002",
-      bankName: "ธนาคารกรุงเทพ",
-      accountName: "ส***ย",
+      bankCode: "014",
+      bankName: "ธนาคารกสิกรไทย",
+      accountName: "Wipada C***o",
       accountNo: "1234567890",
     },
-    parts: [{
-      orderId: "TXN-2608-00993-1",
-      amount: 250,
-      feeAmount: 5,
-      transactionStatus: "PENDING_TRANSFER",
-      matchDeadline: "2026-08-30T10:20:00.000Z",
-      matchedAt: null,
-      cancelReason: null,
-    }],
     ...overrides,
   });
 }
 
 describe("isCeloxC2CCallbackRequest", () => {
-  it("accepts a withdrawal body", () => {
-    expect(isCeloxC2CCallbackRequest(withdrawalBody())).toBe(true);
+  it("เป็นฟังก์ชันเดียวกับ isC2CTransactionResponse เพราะ body เหมือนกันเป๊ะ", () => {
+    expect(isCeloxC2CCallbackRequest).toBe(isC2CTransactionResponse);
   });
 
-  it("accepts a deposit body carrying transferTo and a null unfilledAmount", () => {
-    expect(isCeloxC2CCallbackRequest(depositBody())).toBe(true);
+  it("accepts a valid withdrawal callback", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload())).toBe(true);
   });
 
-  it("rejects a head that still uses the old `status` field", () => {
-    const legacy: Record<string, unknown> = withdrawalBody();
-    legacy.status = legacy.transactionStatus;
+  it("accepts a valid deposit callback carrying transferTo and a null unfilledAmount", () => {
+    expect(isCeloxC2CCallbackRequest(depositPayload())).toBe(true);
+  });
+
+  it("rejects a callback missing parts", () => {
+    const withoutParts: Record<string, unknown> = basePayload();
+    delete withoutParts.parts;
+    expect(isCeloxC2CCallbackRequest(withoutParts)).toBe(false);
+  });
+
+  it("rejects a callback whose parts array is empty", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({ parts: [] }))).toBe(false);
+  });
+
+  it("ปฏิเสธ parts[] ที่ยังใช้ชื่อ status เดิมแทน transactionStatus", () => {
+    const legacy: Record<string, unknown> = part();
     delete legacy.transactionStatus;
-    expect(isCeloxC2CCallbackRequest(legacy)).toBe(false);
-  });
-
-  it("rejects a parts element that still uses the old `status` field", () => {
-    expect(isCeloxC2CCallbackRequest(withdrawalBody({
-      parts: [{
-        orderId: "TXN-2608-00993-1", amount: 100, feeAmount: 5, status: "SUCCESS",
-        matchDeadline: null, matchedAt: null, cancelReason: null,
-      }],
+    expect(isCeloxC2CCallbackRequest(basePayload({
+      parts: [{ ...legacy, status: "SUCCESS" }],
     }))).toBe(false);
   });
 
-  it("rejects realWithdrawAmount sent in place of settledAmount", () => {
-    const legacy: Record<string, unknown> = withdrawalBody();
-    legacy.realWithdrawAmount = legacy.settledAmount;
+  it("ปฏิเสธหัว body ที่ยังใช้ชื่อ status เดิมแทน transactionStatus", () => {
+    const legacy: Record<string, unknown> = basePayload();
+    delete legacy.transactionStatus;
+    expect(isCeloxC2CCallbackRequest({ ...legacy, status: "SUCCESS" })).toBe(false);
+  });
+
+  it("ยอมรับ parts[] ที่ไม่มี transactionId (contract ใหม่ถอด id ระดับก้อนออกแล้ว)", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload())).toBe(true);
+  });
+
+  it("rejects a parts element with an invalid transactionStatus", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({
+      parts: [part({ transactionStatus: "not-a-status" })],
+    }))).toBe(false);
+  });
+
+  it("ยอมรับ parts[] ที่ถูกยกเลิกพร้อม cancelReason และ matchedAt", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({
+      transactionStatus: "CANCELLED",
+      settledAmount: 0,
+      unfilledAmount: 2500,
+      heldAmount: 0,
+      parts: [part({
+        transactionStatus: "CANCELLED",
+        matchedAt: "2026-08-31T10:15:00.000Z",
+        cancelReason: "หมดเวลาโอน",
+      })],
+    }))).toBe(true);
+  });
+
+  it("accepts unfilledAmount of 0 on a withdrawal callback", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({ unfilledAmount: 0 }))).toBe(true);
+  });
+
+  it("accepts a withdrawal callback with a positive unfilledAmount", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({ unfilledAmount: 500 }))).toBe(true);
+  });
+
+  it("rejects a negative unfilledAmount", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({ unfilledAmount: -1 }))).toBe(false);
+  });
+
+  it("ปฏิเสธ callback ถอนที่ unfilledAmount เป็น null (ฝั่งถอนเป็นตัวเลขเสมอ รวม 0)", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({ unfilledAmount: null }))).toBe(false);
+  });
+
+  it("ปฏิเสธ callback ฝากที่ unfilledAmount เป็นตัวเลข (ฝั่งฝากเป็น null เสมอ)", () => {
+    expect(isCeloxC2CCallbackRequest(depositPayload({ unfilledAmount: 0 }))).toBe(false);
+  });
+
+  it("ปฏิเสธ callback ที่ไม่มีคีย์ unfilledAmount เลย", () => {
+    const withoutUnfilled: Record<string, unknown> = basePayload();
+    delete withoutUnfilled.unfilledAmount;
+    expect(isCeloxC2CCallbackRequest(withoutUnfilled)).toBe(false);
+  });
+
+  it("ปฏิเสธ callback ที่ไม่มี settledAmount (field ที่ใช้ตัดเงินทั้งสองขา)", () => {
+    const withoutSettled: Record<string, unknown> = basePayload();
+    delete withoutSettled.settledAmount;
+    expect(isCeloxC2CCallbackRequest(withoutSettled)).toBe(false);
+  });
+
+  it("ปฏิเสธ realWithdrawAmount ที่ส่งมาแทน settledAmount (field นั้นถูกลบไปแล้ว)", () => {
+    const legacy: Record<string, unknown> = basePayload();
     delete legacy.settledAmount;
-    expect(isCeloxC2CCallbackRequest(legacy)).toBe(false);
+    expect(isCeloxC2CCallbackRequest({ ...legacy, realWithdrawAmount: 0 })).toBe(false);
   });
 
-  it("rejects a body with no settledAmount at all", () => {
-    const body: Record<string, unknown> = withdrawalBody();
-    delete body.settledAmount;
-    expect(isCeloxC2CCallbackRequest(body)).toBe(false);
+  it("ปฏิเสธ settledAmount ติดลบ", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({ settledAmount: -1 }))).toBe(false);
   });
 
-  it("rejects a null unfilledAmount on a withdrawal and a numeric one on a deposit", () => {
-    expect(isCeloxC2CCallbackRequest(withdrawalBody({ unfilledAmount: null }))).toBe(false);
-    expect(isCeloxC2CCallbackRequest(depositBody({ unfilledAmount: 0 }))).toBe(false);
+  it("ปฏิเสธ awaitingManualReview ที่ไม่ใช่ boolean", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({ awaitingManualReview: "false" }))).toBe(false);
   });
 
-  it("rejects a body that omits the unfilledAmount key entirely", () => {
-    const body: Record<string, unknown> = withdrawalBody();
-    delete body.unfilledAmount;
-    expect(isCeloxC2CCallbackRequest(body)).toBe(false);
+  it("ปฏิเสธ direction ที่ไม่ใช่ deposit หรือ withdraw", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({ direction: "transfer" }))).toBe(false);
   });
 
-  it("accepts unfilledAmount of 0 when nothing is left to return", () => {
-    expect(isCeloxC2CCallbackRequest(withdrawalBody({ settledAmount: 250, unfilledAmount: 0 }))).toBe(true);
+  it("ปฏิเสธรายการถอนที่ส่ง transferTo มาเป็น object (ฝั่งถอนเป็น null เสมอ)", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({
+      transferTo: { bankCode: "002", bankName: "ธนาคารกรุงเทพ", accountName: "สมชาย ใ***ดี", accountNo: "1234567890" },
+    }))).toBe(false);
   });
 
-  it("rejects an empty parts array and a body with no parts key", () => {
-    expect(isCeloxC2CCallbackRequest(withdrawalBody({ parts: [] }))).toBe(false);
-    const body: Record<string, unknown> = withdrawalBody();
-    delete body.parts;
-    expect(isCeloxC2CCallbackRequest(body)).toBe(false);
+  it("ยอมรับ callback ฝากที่ไม่มีคีย์ transferTo เลย (conditional field)", () => {
+    const withoutTransferTo: Record<string, unknown> = depositPayload();
+    delete withoutTransferTo.transferTo;
+    expect(isCeloxC2CCallbackRequest(withoutTransferTo)).toBe(true);
   });
 
-  it("accepts parts that no longer carry a transactionId", () => {
-    // parts[].transactionId ถูกถอดออกจากสัญญาใหม่ — body ที่ไม่มีต้องผ่าน
-    const body = withdrawalBody();
-    expect(Object.hasOwn(body.parts[0], "transactionId")).toBe(false);
-    expect(isCeloxC2CCallbackRequest(body)).toBe(true);
+  it("ปฏิเสธ matchDeadline ที่ไม่ใช่เวลา ISO 8601", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({ matchDeadline: "2026-08-31" }))).toBe(false);
   });
 
-  it("rejects a deposit whose transferTo is not an object", () => {
-    expect(isCeloxC2CCallbackRequest(depositBody({ transferTo: "ธนาคารกรุงเทพ" }))).toBe(false);
+  it("ยอมรับ field แปลกปลอมที่ยังไม่รู้จัก แทนที่จะ reject ทั้ง request (raw body ถูกเซ็นทั้งก้อนอยู่แล้ว)", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({ notARealField: "x" }))).toBe(true);
   });
 
-  it("accepts a deposit with no transferTo key at all", () => {
-    const body: Record<string, unknown> = depositBody();
-    delete body.transferTo;
-    expect(isCeloxC2CCallbackRequest(body)).toBe(true);
+  it("ยอมรับ occurredAt กับ event ที่หลุดมาแม้ contract ใหม่ถอดออกแล้ว (เป็นแค่ field ที่ไม่ได้ใช้)", () => {
+    expect(isCeloxC2CCallbackRequest(basePayload({
+      occurredAt: "2026-08-31T10:15:00.000Z",
+      event: "matched",
+    }))).toBe(true);
   });
 
-  it("accepts unknown fields at every level", () => {
-    // raw body ถูก hash ทั้งก้อนอยู่แล้ว field ใหม่ที่ Celox เพิ่มจึงต้องไหลผ่านได้
-    // ไม่ใช่กลายเป็น 422 ที่ทำให้ Celox ยิงซ้ำไปเรื่อย ๆ
-    expect(isCeloxC2CCallbackRequest(depositBody({
-      notARealField: "x",
+  it("ยอมรับ body ที่ไม่มี occurredAt และ event เลย (รูปแบบปกติของ contract ใหม่)", () => {
+    const payload: Record<string, unknown> = basePayload();
+    expect(Object.hasOwn(payload, "occurredAt")).toBe(false);
+    expect(isCeloxC2CCallbackRequest(payload)).toBe(true);
+  });
+
+  it("ยอมรับ field แปลกปลอมที่ซ้อนอยู่ใน transferTo และ parts[] ด้วย", () => {
+    expect(isCeloxC2CCallbackRequest(depositPayload({
       transferTo: {
-        bankCode: "002", bankName: "ธนาคารกรุงเทพ", accountName: "ส***ย",
-        accountNo: "1234567890", promptPayId: "0812345678",
+        bankCode: "002", bankName: "ธนาคารกรุงเทพ", accountName: "สมชาย ใจดี", accountNo: "1234567890",
+        unknownField: "x",
       },
-      parts: [{
-        orderId: "TXN-2608-00993-1", amount: 250, feeAmount: 5,
-        transactionStatus: "PENDING_TRANSFER", matchDeadline: null, matchedAt: null,
-        cancelReason: null, someNewThing: 1,
-      }],
+      parts: [part({ unknownField: "x" })],
     }))).toBe(true);
-  });
-
-  it("accepts a body with no occurredAt/event, and one that still carries them", () => {
-    const body: Record<string, unknown> = withdrawalBody();
-    expect(isCeloxC2CCallbackRequest(body)).toBe(true);
-    // ทั้งสองถูกถอดออกจากสัญญาแล้ว แต่ถ้ายังหลุดมาก็ไม่ใช่เหตุให้ปฏิเสธทั้ง body
-    expect(isCeloxC2CCallbackRequest(withdrawalBody({
-      occurredAt: "2026-08-30T10:05:12.000Z",
-      event: "settled",
-    }))).toBe(true);
-  });
-
-  it("rejects a negative settledAmount", () => {
-    expect(isCeloxC2CCallbackRequest(withdrawalBody({ settledAmount: -1 }))).toBe(false);
-  });
-});
-
-describe("areAllC2CPartsTerminal", () => {
-  it("is true only when every part reached a terminal status", () => {
-    expect(areAllC2CPartsTerminal([
-      { transactionStatus: "SUCCESS" },
-      { transactionStatus: "EXPIRED" },
-      { transactionStatus: "CANCELLED" },
-    ])).toBe(true);
-  });
-
-  it("is false while any part is still running, even if the head says SUCCESS", () => {
-    expect(areAllC2CPartsTerminal([
-      { transactionStatus: "SUCCESS" },
-      { transactionStatus: "PENDING_TRANSFER" },
-    ])).toBe(false);
   });
 });

@@ -10,6 +10,7 @@ import {
 
 const MAX_PROCESSING_ATTEMPTS = 3;
 const RETRY_JITTER_CAPS_MS = [500, 1_000] as const;
+// กันการ replay callback ที่ดักจับไว้ก่อนหน้ามายิงซ้ำทีหลัง — ต้องเช็คแม้ลายเซ็นจะตรง
 const REPLAY_WINDOW_SECONDS = 300;
 
 function callbackSecret() {
@@ -30,15 +31,20 @@ function unauthenticated(message: string): never {
   throw new CeloxError({ code: "unauthenticated", message, httpStatus: 401 });
 }
 
+// ใช้เป็น fingerprint กันข้อมูลซ้ำเวลาบันทึกลง inbox เท่านั้น ไม่เกี่ยวกับการยืนยันตัวตน
+// เซ็น raw bytes ทั้งก้อนตรงๆ จึงไม่มีวันตกยุคเมื่อ Celox เพิ่ม field ใหม่ในอนาคต
 export function hashRawC2CCallbackBody(rawBody: string) {
   return createHash("sha256").update(rawBody, "utf8").digest("hex");
 }
 
 /**
- * Signature scheme v2: signs the raw request body bytes plus a timestamp,
- * never a re-derived canonical JSON of parsed fields — so an unrecognised
- * field can never be silently dropped from what's actually verified.
- * `X-Celox-Signature = hmac-sha256(secret, "v2\n" + timestamp + "\n" + sha256hex(rawBody))`.
+ * v2: material = "v2" + "\n" + X-Celox-Timestamp (verbatim) + "\n" + sha256hex(raw body)
+ * เซ็น raw body ทั้งก้อนเป็น opaque bytes — ไม่มี field list ให้ sync ตามเมื่อ Celox เพิ่ม
+ * field ใหม่ ต่างจาก scheme เดิมที่เซ็นเฉพาะ field ที่เลือกมา
+ *
+ * นโยบายของโปรเจกต์นี้: บังคับต้องมีทั้ง X-Celox-Timestamp และ X-Celox-Signature เสมอ
+ * แม้ Celox เอกสารจะระบุว่า verification เป็น optional และอาจไม่ส่ง header ทั้งคู่มาเมื่อ
+ * credential เก่าเกินไป — เรายอมรับความเสี่ยงนั้นไม่ได้เพราะ callback นี้เกี่ยวกับการหักเงินจริง
  */
 export function verifyCeloxC2CCallbackSignatureV2(
   rawBody: string,
@@ -47,15 +53,23 @@ export function verifyCeloxC2CCallbackSignatureV2(
 ) {
   if (!timestampHeader) unauthenticated("X-Celox-Timestamp หายไป");
   if (!signatureHeader) unauthenticated("X-Celox-Signature หายไป");
-  if (!/^\d+$/.test(timestampHeader)) unauthenticated("รูปแบบ X-Celox-Timestamp ไม่ถูกต้อง");
 
-  const skewSeconds = Math.abs(Math.floor(Date.now() / 1000) - Number(timestampHeader));
-  if (skewSeconds > REPLAY_WINDOW_SECONDS) unauthenticated("X-Celox-Timestamp ห่างจากเวลาปัจจุบันเกินกำหนด");
+  if (!/^\d+$/.test(timestampHeader)) {
+    unauthenticated("X-Celox-Timestamp มีรูปแบบไม่ถูกต้อง");
+  }
+  const timestampSeconds = Number(timestampHeader);
+  const skewSeconds = Math.abs(Math.floor(Date.now() / 1000) - timestampSeconds);
+  if (skewSeconds > REPLAY_WINDOW_SECONDS) {
+    unauthenticated("X-Celox-Timestamp ห่างจากเวลาปัจจุบันเกินกำหนด (ป้องกัน replay)");
+  }
 
   const supplied = signatureHeader.trim().toLowerCase().replace(/^sha256=/, "");
-  if (!/^[0-9a-f]{64}$/.test(supplied)) unauthenticated("รูปแบบ X-Celox-Signature ไม่ถูกต้อง");
+  if (!/^[0-9a-f]{64}$/.test(supplied)) {
+    unauthenticated("X-Celox-Signature มีรูปแบบไม่ถูกต้อง");
+  }
 
-  const material = `v2\n${timestampHeader}\n${hashRawC2CCallbackBody(rawBody)}`;
+  const bodyHash = hashRawC2CCallbackBody(rawBody);
+  const material = `v2\n${timestampHeader}\n${bodyHash}`;
   const expected = createHmac("sha256", callbackSecret()).update(material, "utf8").digest();
   const received = Buffer.from(supplied, "hex");
   if (received.length !== expected.length || !timingSafeEqual(received, expected)) {

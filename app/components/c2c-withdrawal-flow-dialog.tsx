@@ -18,9 +18,6 @@ import {
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import C2CCallbackFeed from "@/app/components/c2c-callback-feed";
 import { BANK_NAME_MAP } from "@/lib/celox/banks";
-// ฝั่งถอนใช้นิยาม terminal ตามสัญญา C2C (SUCCESS/EXPIRED/CANCELLED) ไม่ใช่ isC2CTerminal ของ
-// ไฟล์ display ที่จงใจไม่นับ EXPIRED เพราะฝั่งฝากยังแนบสลิปใหม่กับรายการ EXPIRED ได้
-import { isC2CTerminalStatus } from "@/lib/celox/c2c-callback-validation";
 import { c2cStatusDescription, c2cStatusLabel, c2cStatusTone } from "@/lib/celox/c2c-display";
 import type {
   C2CMatchTtlSeconds,
@@ -71,6 +68,11 @@ function fieldMessage(error: CeloxFieldError) {
   return "ข้อมูลช่องนี้ไม่ถูกต้อง";
 }
 
+// ฝั่งถอนถือว่า EXPIRED จบแล้ว ต่างจาก UI ฝั่งฝากที่ยังแนบสลิปใหม่ได้.
+function isWithdrawalTerminal(status: string) {
+  return status === "SUCCESS" || status === "EXPIRED" || status === "CANCELLED";
+}
+
 export default function C2CWithdrawalFlowDialog({
   customer,
   onClose,
@@ -112,14 +114,11 @@ export default function C2CWithdrawalFlowDialog({
     onChangedRef.current = onChanged;
   }, [onChanged]);
 
-  // หลังสร้างรายการถอนสำเร็จ ระบบตรวจสถานะกับ Celox เป็นระยะ (GET คือข้อมูลอ้างอิงหลัก
-  // ตามหน้ารายการ C2C) แล้วแสดงขั้นที่ไปถึงไว้ในหน้าต่างนี้ ไม่ปิดเองอีกต่อไป
-  // เจ้าหน้าที่จะได้เห็นว่า callback จาก Celox มาถึงขั้นไหนแล้วก่อนกดปิด
+  // GET ยังคงเป็นข้อมูลอ้างอิงหลัก แต่เก็บผลลง state เพื่อให้เจ้าหน้าที่เห็นลำดับ
+  // สถานะใน modal เอง แทนการปิดหน้าต่างอัตโนมัติเมื่อสถานะเปลี่ยน
   const activeReference = withdrawal?.referenceId || withdrawal?.orderId;
-  const liveStatus = status?.transactionStatus ?? withdrawal?.transactionStatus;
-  const watching = phase === "result" && Boolean(activeReference) && !isC2CTerminalStatus(liveStatus ?? "");
   useEffect(() => {
-    if (!watching || !activeReference) return;
+    if (phase !== "result" || !activeReference || isWithdrawalTerminal(status?.transactionStatus ?? withdrawal?.transactionStatus ?? "PENDING")) return;
     const controller = new AbortController();
     const delay = Math.min(15_000, 5_000 + pollAttemptRef.current * 2_500);
     const timer = window.setTimeout(async () => {
@@ -135,11 +134,8 @@ export default function C2CWithdrawalFlowDialog({
           return;
         }
         setStatus(result);
-        pollAttemptRef.current = 0;
-        // PENDING_TRANSFER = Celox จับคู่กับผู้ฝากได้แล้ว, SUCCESS/CANCELLED/EXPIRED = รายการจบ
-        // อัปเดตหน้ารายการเบื้องหลังได้ แต่ปล่อยให้เจ้าหน้าที่เป็นคนปิดหน้าต่างเอง
         onChangedRef.current();
-        if (isC2CTerminalStatus(result.transactionStatus)) return;
+        pollAttemptRef.current += 1;
         setPollRevision((current) => current + 1);
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
@@ -151,7 +147,7 @@ export default function C2CWithdrawalFlowDialog({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [activeReference, watching, pollRevision]);
+  }, [activeReference, phase, pollRevision, status?.transactionStatus, withdrawal?.transactionStatus]);
 
   function requestClose() {
     if (busy) return;
@@ -324,11 +320,11 @@ export default function C2CWithdrawalFlowDialog({
             <div className="result-heading"><span className="state-symbol"><Hourglass size={27} /></span><div><h3>{c2cStatusLabel(resultStatus ?? withdrawal.transactionStatus)}</h3><p>{c2cStatusDescription(resultStatus ?? withdrawal.transactionStatus)}</p></div></div>
             <div className="result-amount"><span>ยอดถอน</span><strong>{currency.format(withdrawal.amount)}</strong></div>
             <dl className="result-details"><div><dt>ค่าธรรมเนียม Celox</dt><dd>{currency.format(withdrawal.feeAmount)}</dd></div><div><dt>ยอดที่ Celox กัน</dt><dd>{currency.format(withdrawal.reservedAmount)}</dd></div><div><dt>Order ID</dt><dd>{withdrawal.orderId}</dd></div><div><dt>Reference ID</dt><dd>{withdrawal.referenceId}</dd></div><div><dt>เส้นตายจับคู่</dt><dd>{withdrawal.matchDeadline ? dateTime.format(new Date(withdrawal.matchDeadline)) : "จับคู่แล้ว"}</dd></div></dl>
-            {withdrawal.transactionStatus === "PENDING_MANUAL_C2C" && <div className="deposit-clarification warning"><ShieldAlert size={18} /><span><strong>รายการถูกส่งให้เจ้าหน้าที่ Celox ตรวจสอบ</strong> ยอดที่กันไว้ยังใช้งานไม่ได้ และรายการนี้ยกเลิกเองไม่ได้จนกว่าจะมีผลสถานะใหม่</span></div>}
+            {resultStatus === "PENDING_MANUAL_C2C" && <div className="deposit-clarification warning"><ShieldAlert size={18} /><span><strong>รายการถูกส่งให้เจ้าหน้าที่ Celox ตรวจสอบ</strong> ยอดที่กันไว้ยังใช้งานไม่ได้ และรายการนี้ยกเลิกเองไม่ได้จนกว่าจะมีผลสถานะใหม่</span></div>}
             <div className="privacy-notice"><ShieldAlert size={18} /><span><strong>ฝั่งถอนไม่ได้รับข้อมูลคู่รายการ</strong> สถานะเปลี่ยนเป็น PENDING_TRANSFER คือข้อมูลทั้งหมดที่ Celox เปิดเผยเมื่อจับคู่แล้ว</span></div>
             {globalError && <div className="form-error" role="alert">{globalError}</div>}
-            {activeReference && <C2CCallbackFeed reference={activeReference} active={watching} />}
-            <div className="deposit-clarification"><Hourglass size={18} /><span><strong>{watching ? "ระบบกำลังเฝ้าสถานะรายการนี้" : "รายการนี้จบแล้ว"}</strong> {watching ? "สถานะด้านบนจะอัปเดตเองเมื่อ Celox จับคู่ผู้ฝากได้หรือส่ง callback เข้ามา" : "ปิดหน้าต่างได้เลย ดูย้อนหลังได้ที่หน้ารายการ C2C"}</span></div>
+            <div className="deposit-clarification"><Hourglass size={18} /><span><strong>ระบบกำลังเฝ้าสถานะรายการนี้</strong> สถานะจะอัปเดตในหน้าต่างนี้ และคุณเลือกปิดเองได้เมื่ออ่านข้อมูลครบแล้ว</span></div>
+            <C2CCallbackFeed reference={withdrawal.transactionId} active={!isWithdrawalTerminal(resultStatus ?? withdrawal.transactionStatus)} />
             <div className="dialog-actions deposit-actions">{resultStatus === "PENDING" && <button className="button danger-outline-button" type="button" onClick={() => void cancelWithdrawal()}>ยกเลิกรายการ</button>}<button className="button deposit-button" type="button" onClick={requestClose}>ปิดและดูในรายการ C2C</button></div>
           </div>
         )}

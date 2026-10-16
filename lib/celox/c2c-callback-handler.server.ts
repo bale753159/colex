@@ -19,20 +19,29 @@ function errorResponse(status: number, error: string, code: string) {
 }
 
 /**
- * แยก C2C ออกจาก callback ขาบัญชีปกติที่ endpoint รวม: C2C คือ body ที่มี `parts` เป็น array
- * หรือมีคีย์ `transactionStatus` — ห้ามใช้ `event`/`transferTo` อีกต่อไป `event` ถูกถอดออกจาก
- * สัญญาใหม่ และ `transferTo` เป็นแค่ field แบบมีเงื่อนไขของขาฝากที่ยังรอโอน
+ * แยก callback C2C ออกจาก callback ปกติบน endpoint กลาง `/api/celox/callback`
+ *
+ * `parts` เป็นตัวชี้ขาด เพราะสเปคระบุว่ามีอยู่ในทุก callback C2C เสมอทั้งฝั่งฝากและถอน
+ * (แม้รายการไม่เคยถูก split ก็ยังได้ array หนึ่งสมาชิก) ส่วน callback ปกติมีแค่หก field
+ * (`CeloxCallbackRequest`) ไม่มี `parts` เลย
+ *
+ * `transactionStatus` เป็นตัวชี้ขาดสำรอง: contract ใหม่เปลี่ยนชื่อ field สถานะของ C2C
+ * จาก `status` เป็น `transactionStatus` ส่วน callback ปกติยังใช้ `status` อยู่ จึงแยกกัน
+ * ได้ชัดแม้ `parts` จะผิดรูปมา
+ *
+ * ห้ามกลับไปดู `event`/`transferTo` แบบเดิม: contract ใหม่ถอด `event` ออกทั้ง field และ
+ * `transferTo` มีเฉพาะฝั่งฝากที่ยังโอนได้ ทำให้ callback ถอน C2C ที่ยังไม่จับคู่ (ไม่มีทั้งสอง
+ * field) ตกไปเข้า verifier ของ callback ปกติ ซึ่งไม่มี material "v2\n<timestamp>\n<bodyHash>"
+ * จึงถูกปฏิเสธด้วย 401 ทุกครั้ง
  */
 export function looksLikeCeloxC2CCallback(value: unknown) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  return Array.isArray((value as { parts?: unknown }).parts)
-    || Object.hasOwn(value, "transactionStatus");
+  return typeof value === "object"
+    && value !== null
+    && !Array.isArray(value)
+    && (Array.isArray((value as Record<string, unknown>).parts)
+      || Object.hasOwn(value, "transactionStatus"));
 }
 
-/**
- * ลำดับคือ validate ก่อนแล้วค่อย verify ลายเซ็น: body รูปแบบใหม่ที่ลายเซ็นไม่ผ่านจึงตอบ 401
- * ส่วน body รูปแบบเก่าตอบ 422 — ใช้เป็น probe ตอน deploy ว่าโค้ดใหม่ขึ้นแล้วโดยไม่ต้องรู้ secret
- */
 export async function acceptCeloxC2CCallbackPayload(
   payload: unknown,
   rawBody: string,
@@ -59,7 +68,7 @@ export async function acceptCeloxC2CCallbackPayload(
     return errorResponse(503, "บันทึก Callback C2C ลงระบบไม่สำเร็จ", "persistence_error");
   }
   if (queued.conflict) {
-    return errorResponse(409, "Callback C2C key เดิมมี body ต่างจาก event ที่บันทึกไว้", "callback_conflict");
+    return errorResponse(409, "Callback C2C key เดิมมี signed payload ต่างจาก event ที่บันทึกไว้", "callback_conflict");
   }
 
   if (queued.shouldProcess) {

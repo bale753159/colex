@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { attachC2CDepositSlip, checkC2CTransaction, createC2CWithdrawal } from "./c2c-client.server";
-import type { CreateC2CWithdrawalRequest } from "./types";
+import { attachC2CDepositSlip, checkC2CTransaction, createC2CDeposit, createC2CWithdrawal } from "./c2c-client.server";
+import type { CreateC2CDepositRequest, CreateC2CWithdrawalRequest } from "./types";
 
 function transactionFixture(overrides: Record<string, unknown> = {}) {
   return {
@@ -48,6 +48,45 @@ afterEach(() => {
   delete process.env.CELOX_CLIENT_SECRET;
 });
 
+describe("createC2CDeposit", () => {
+  const input: CreateC2CDepositRequest = {
+    amount: 50,
+    sourceBankCode: "004",
+    sourceAccountName: "ทดสอบ ระบบ",
+    sourceAccountNo: "1234567890",
+    matchTtlSeconds: 600,
+    referenceId: "KLANG-C2C-DP-TEST",
+  };
+  const depositFixture = (overrides: Record<string, unknown> = {}) => ({
+    transactionId: randomUUID(),
+    orderId: "DEP-C2C-1790598826202-OmMX9",
+    referenceId: input.referenceId,
+    transactionStatus: "PENDING",
+    amount: 50,
+    transferTo: null,
+    matchDeadline: "2026-09-28T12:34:46.198Z",
+    ...overrides,
+  });
+
+  it("ส่ง payUrl ของ Celox ต่อให้หน้าบ้านเอาไปฝังเป็น iframe", async () => {
+    const payUrl = "https://pay-stg.celox.app/pay/c2c?id=abc&t=def";
+    stubFetchJson(depositFixture({ payUrl }), 201);
+    const result = await createC2CDeposit(input);
+    expect(result.payUrl).toBe(payUrl);
+  });
+
+  it("ยังรับ response ที่ไม่มี payUrl", async () => {
+    stubFetchJson(depositFixture(), 201);
+    const result = await createC2CDeposit(input);
+    expect(result.payUrl).toBeUndefined();
+  });
+
+  it("rejects a payUrl that is not a string", async () => {
+    stubFetchJson(depositFixture({ payUrl: 123 }), 201);
+    await expect(createC2CDeposit(input)).rejects.toMatchObject({ code: "invalid_response" });
+  });
+});
+
 describe("checkC2CTransaction", () => {
   it("accepts a withdrawal transaction with unfilledAmount 0", async () => {
     stubFetchJson(transactionFixture());
@@ -68,6 +107,49 @@ describe("checkC2CTransaction", () => {
 
   it("rejects a deposit transaction with a non-null unfilledAmount", async () => {
     stubFetchJson(transactionFixture({ direction: "deposit", unfilledAmount: 0 }));
+    await expect(checkC2CTransaction("TXN-2608-00994")).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("อ่าน settledAmount เป็นยอดที่จบจริง แยกจาก amount ที่เป็นยอดตั้งต้น", async () => {
+    stubFetchJson(transactionFixture({
+      transactionStatus: "SUCCESS",
+      amount: 250,
+      settledAmount: 190,
+      unfilledAmount: 60,
+      heldAmount: 0,
+      parts: [
+        {
+          orderId: "TXN-2608-00994-1", amount: 190, feeAmount: 2.85,
+          transactionStatus: "SUCCESS", matchDeadline: null,
+          matchedAt: "2026-08-31T10:00:00.000Z", cancelReason: null,
+        },
+        {
+          orderId: "TXN-2608-00994-2", amount: 60, feeAmount: 0.9,
+          transactionStatus: "CANCELLED", matchDeadline: null,
+          matchedAt: null, cancelReason: "หมดเวลาโอน",
+        },
+      ],
+    }));
+    const result = await checkC2CTransaction("TXN-2608-00994");
+    expect(result.amount).toBe(250);
+    expect(result.settledAmount).toBe(190);
+    expect(result.settledAmount + (result.unfilledAmount ?? 0)).toBe(result.amount);
+  });
+
+  it("ปฏิเสธ response ที่ใช้ชื่อ realWithdrawAmount (field นั้นถูกลบไปแล้ว)", async () => {
+    const legacy: Record<string, unknown> = transactionFixture();
+    delete legacy.settledAmount;
+    stubFetchJson({ ...legacy, realWithdrawAmount: 0 });
+    await expect(checkC2CTransaction("TXN-2608-00994")).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("ปฏิเสธ response ที่ parts[] ยังใช้ชื่อ status เดิม", async () => {
+    stubFetchJson(transactionFixture({
+      parts: [{
+        orderId: "TXN-2608-00994", amount: 1000, feeAmount: 15,
+        status: "PENDING_TRANSFER", matchDeadline: null, matchedAt: null, cancelReason: null,
+      }],
+    }));
     await expect(checkC2CTransaction("TXN-2608-00994")).rejects.toMatchObject({ code: "invalid_response" });
   });
 });

@@ -2,23 +2,17 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/sql";
 import { setupTestDatabase, teardownTestDatabase, truncateAll } from "@/test/pg-harness";
-import type { CeloxC2CCallbackRequest, C2CTransactionResponse } from "./celox/types";
+import type { C2CTransactionPart, C2CTransactionResponse, CeloxC2CCallbackRequest } from "./celox/types";
 
 let syncCeloxC2CTransaction: typeof import("./db")["syncCeloxC2CTransaction"];
 let enqueueCeloxC2CCallbackEvent: typeof import("./db")["enqueueCeloxC2CCallbackEvent"];
 let processCeloxC2CCallbackEvent: typeof import("./db")["processCeloxC2CCallbackEvent"];
-let getCeloxC2CCallbackTimeline: typeof import("./db")["getCeloxC2CCallbackTimeline"];
 
 const FAKE_HASH = "a".repeat(64);
 
 beforeAll(async () => {
   await setupTestDatabase();
-  ({
-    syncCeloxC2CTransaction,
-    enqueueCeloxC2CCallbackEvent,
-    processCeloxC2CCallbackEvent,
-    getCeloxC2CCallbackTimeline,
-  } = await import("./db"));
+  ({ syncCeloxC2CTransaction, enqueueCeloxC2CCallbackEvent, processCeloxC2CCallbackEvent } = await import("./db"));
 });
 
 beforeEach(async () => {
@@ -29,17 +23,19 @@ afterAll(async () => {
   await teardownTestDatabase();
 });
 
-async function seedWithdrawal(options: {
+async function seedC2C(options: {
+  direction?: "deposit" | "withdraw";
   balanceSatang: number;
   withdrawableSatang: number;
   amountSatang: number;
   feeSatang: number;
 }) {
+  const direction = options.direction ?? "withdraw";
   const now = new Date().toISOString();
   const customerId = `C-${randomUUID()}`;
   const localTransactionId = `TXN-${randomUUID()}`;
   const transactionId = randomUUID();
-  const orderId = `WTH-${randomUUID()}`;
+  const orderId = `${direction === "withdraw" ? "WTH" : "DEP"}-${randomUUID()}`;
   const referenceId = `REF-${randomUUID()}`;
 
   await db.run(`
@@ -49,20 +45,21 @@ async function seedWithdrawal(options: {
 
   await db.run(`
     INSERT INTO transactions (id, customer_id, direction, channel, amount_satang, status, created_at)
-    VALUES (?, ?, 'withdraw', 'c2c', ?, 'pending', ?)
-  `, [localTransactionId, customerId, options.amountSatang, now]);
+    VALUES (?, ?, ?, 'c2c', ?, 'pending', ?)
+  `, [localTransactionId, customerId, direction, options.amountSatang, now]);
 
+  // ฝั่งถอนกันเงินไว้ตอนสร้างรายการ (funds_reserved) ฝั่งฝากไม่มีอะไรให้กัน
   await db.run(`
     INSERT INTO celox_c2c_transactions (
       transaction_id, order_id, reference_id, customer_id, direction,
       transaction_status, amount_satang, fee_amount_satang,
       settled_amount_satang, held_amount_satang, awaiting_manual_review,
       match_deadline, funds_reserved, local_transaction_id, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'withdraw', 'PENDING_TRANSFER', ?, ?, 0, ?, false, NULL, true, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, 'PENDING_TRANSFER', ?, ?, 0, ?, false, NULL, ?, ?, ?, ?)
   `, [
-    transactionId, orderId, referenceId, customerId,
+    transactionId, orderId, referenceId, customerId, direction,
     options.amountSatang, options.feeSatang, options.amountSatang + options.feeSatang,
-    localTransactionId, now, now,
+    direction === "withdraw", localTransactionId, now, now,
   ]);
 
   return { customerId, localTransactionId, transactionId, orderId, referenceId };
@@ -90,43 +87,22 @@ async function readLocalTransaction(localTransactionId: string) {
     [localTransactionId]) as { status: string };
 }
 
-
-async function seedDeposit(options: { amountSatang: number }) {
-  const now = new Date().toISOString();
-  const customerId = `C-${randomUUID()}`;
-  const localTransactionId = `TXN-${randomUUID()}`;
-  const transactionId = randomUUID();
-  const orderId = `DEP-${randomUUID()}`;
-  const referenceId = `REF-${randomUUID()}`;
-
-  await db.run(`
-    INSERT INTO customers (id, name, account, initials, color, balance_satang, withdrawable_satang, created_at)
-    VALUES (?, 'ทดสอบ', ?, 'ท', '#000000', 0, 0, ?)
-  `, [customerId, `ACC-${randomUUID()}`, now]);
-
-  await db.run(`
-    INSERT INTO transactions (id, customer_id, direction, channel, amount_satang, status, created_at)
-    VALUES (?, ?, 'deposit', 'c2c', ?, 'pending', ?)
-  `, [localTransactionId, customerId, options.amountSatang, now]);
-
-  await db.run(`
-    INSERT INTO celox_c2c_transactions (
-      transaction_id, order_id, reference_id, customer_id, direction,
-      transaction_status, amount_satang, fee_amount_satang,
-      settled_amount_satang, held_amount_satang, awaiting_manual_review,
-      match_deadline, funds_reserved, local_transaction_id, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'deposit', 'PENDING_TRANSFER', ?, 0, 0, 0, false, NULL, false, ?, ?, ?)
-  `, [transactionId, orderId, referenceId, customerId, options.amountSatang, localTransactionId, now, now]);
-
-  return { customerId, localTransactionId, transactionId, orderId, referenceId };
+function part(overrides: Partial<C2CTransactionPart> = {}): C2CTransactionPart {
+  return {
+    orderId: "PART-1",
+    amount: 100,
+    feeAmount: 1.5,
+    transactionStatus: "SUCCESS",
+    matchDeadline: null,
+    matchedAt: "2026-09-08T10:00:00.000Z",
+    cancelReason: null,
+    ...overrides,
+  };
 }
 
-type CallbackSeed = { transactionId: string; orderId: string; referenceId: string };
+type Seed = Awaited<ReturnType<typeof seedC2C>>;
 
-function withdrawalCallback(
-  seed: CallbackSeed,
-  overrides: Partial<CeloxC2CCallbackRequest> = {},
-): CeloxC2CCallbackRequest {
+function body(seed: Seed, overrides: Partial<C2CTransactionResponse> = {}): C2CTransactionResponse {
   return {
     transactionId: seed.transactionId,
     orderId: seed.orderId,
@@ -134,297 +110,265 @@ function withdrawalCallback(
     direction: "withdraw",
     transactionStatus: "SUCCESS",
     amount: 100,
-    feeAmount: 2,
+    feeAmount: 1.5,
     settledAmount: 100,
     heldAmount: 0,
     unfilledAmount: 0,
     awaitingManualReview: false,
     matchDeadline: null,
     transferTo: null,
-    parts: [{
-      orderId: `${seed.orderId}-1`, amount: 100, feeAmount: 2, transactionStatus: "SUCCESS",
-      matchDeadline: null, matchedAt: new Date().toISOString(), cancelReason: null,
-    }],
+    parts: [part({ orderId: `${seed.orderId}-1` })],
     ...overrides,
   };
 }
 
-describe("syncCeloxC2CTransaction settling a partially-filled withdrawal", () => {
-  it("debits only the settled amount and releases the unfilled remainder", async () => {
-    const seed = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
-    const result: C2CTransactionResponse = {
-      transactionId: seed.transactionId,
-      orderId: seed.orderId,
-      referenceId: seed.referenceId,
-      direction: "withdraw",
-      transactionStatus: "SUCCESS",
+describe("syncCeloxC2CTransaction — ตัดเงินจาก settledAmount ไม่ใช่ amount", () => {
+  it("หักลูกค้าแค่ยอดที่ถอนสำเร็จจริง และคืนส่วนที่ไม่สำเร็จ ทั้งที่ amount ยังเป็นยอดตั้งต้น", async () => {
+    const seed = await seedC2C({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
+    await syncCeloxC2CTransaction(body(seed, {
       amount: 100,
-      feeAmount: 0.8,
       settledAmount: 40,
-      heldAmount: 0,
       unfilledAmount: 60,
-      awaitingManualReview: false,
-      matchDeadline: null,
-      transferTo: null,
-      parts: [{
-        orderId: seed.orderId, amount: 40, feeAmount: 0.8, transactionStatus: "SUCCESS",
-        matchDeadline: null, matchedAt: new Date().toISOString(), cancelReason: null,
-      }],
-    };
-
-    await syncCeloxC2CTransaction(result);
+      parts: [
+        part({ orderId: `${seed.orderId}-1`, amount: 40, transactionStatus: "SUCCESS" }),
+        part({ orderId: `${seed.orderId}-2`, amount: 60, transactionStatus: "CANCELLED", matchedAt: null, cancelReason: "หมดเวลาโอน" }),
+      ],
+    }));
 
     expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 16_000, withdrawable_satang: 16_000 });
     const row = await readC2CRow(seed.transactionId);
     expect(row.transaction_status).toBe("SUCCESS");
     expect(row.settled_amount_satang).toBe(4_000);
+    expect(row.unfilled_amount_satang).toBe(6_000);
     expect(row.held_amount_satang).toBe(0);
     expect(row.funds_reserved).toBe(false);
     expect((await readLocalTransaction(seed.localTransactionId)).status).toBe("success");
   });
 
-  it("rejects a settledAmount larger than the originally reserved amount", async () => {
-    const seed = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
-    const result: C2CTransactionResponse = {
-      transactionId: seed.transactionId,
-      orderId: seed.orderId,
-      referenceId: seed.referenceId,
-      direction: "withdraw",
-      transactionStatus: "SUCCESS",
-      amount: 150,
-      feeAmount: 3,
-      settledAmount: 150,
-      heldAmount: 0,
-      unfilledAmount: 0,
-      awaitingManualReview: false,
-      matchDeadline: null,
-      transferTo: null,
-      parts: [{
-        orderId: seed.orderId, amount: 150, feeAmount: 3, transactionStatus: "SUCCESS",
-        matchDeadline: null, matchedAt: new Date().toISOString(), cancelReason: null,
-      }],
-    };
-
-    await expect(syncCeloxC2CTransaction(result)).rejects.toThrow();
-  });
-});
-
-describe("processCeloxC2CCallbackEvent settling a partially-filled withdrawal via webhook", () => {
-  it("debits only the callback's amount and releases the unfilled remainder", async () => {
-    const seed = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
-    const payload: CeloxC2CCallbackRequest = {
-      transactionId: seed.transactionId,
-      orderId: seed.orderId,
-      referenceId: seed.referenceId,
-      direction: "withdraw",
+  it("ไม่ขยับเงินเลยเมื่อ head เป็น SUCCESS แต่ยังมีก้อนที่ไม่ terminal (roll-up ไม่ใช่สัญญาณว่าจบ)", async () => {
+    const seed = await seedC2C({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
+    await syncCeloxC2CTransaction(body(seed, {
       transactionStatus: "SUCCESS",
       amount: 100,
-      feeAmount: 0.8,
       settledAmount: 40,
-      heldAmount: 0,
-      unfilledAmount: 60,
-      awaitingManualReview: false,
-      matchDeadline: null,
-      transferTo: null,
-      parts: [{
-        orderId: seed.orderId, amount: 40, feeAmount: 0.8, transactionStatus: "SUCCESS",
-        matchDeadline: null, matchedAt: new Date().toISOString(), cancelReason: null,
-      }],
-    };
-    const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
-    const processed = await processCeloxC2CCallbackEvent(queued.eventId);
-
-    expect(processed.processing_state).toBe("applied");
-    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 16_000, withdrawable_satang: 16_000 });
-    const row = await readC2CRow(seed.transactionId);
-    expect(row.settled_amount_satang).toBe(4_000);
-    expect(row.funds_reserved).toBe(false);
-  });
-});
-
-
-describe("processCeloxC2CCallbackEvent money rules", () => {
-  it("splits a 250 withdrawal into a settled 100 and a returned 150, never debiting the full 250", async () => {
-    const seed = await seedWithdrawal({ balanceSatang: 40_000, withdrawableSatang: 15_000, amountSatang: 25_000, feeSatang: 500 });
-    const payload = withdrawalCallback(seed, {
-      amount: 250, feeAmount: 5, settledAmount: 100, unfilledAmount: 150,
+      unfilledAmount: 0,
+      heldAmount: 0.9,
       parts: [
-        { orderId: `${seed.orderId}-1`, amount: 100, feeAmount: 5, transactionStatus: "SUCCESS", matchDeadline: null, matchedAt: new Date().toISOString(), cancelReason: null },
-        { orderId: `${seed.orderId}-2`, amount: 100, feeAmount: 0, transactionStatus: "EXPIRED", matchDeadline: null, matchedAt: null, cancelReason: "no match" },
-        { orderId: `${seed.orderId}-3`, amount: 50, feeAmount: 0, transactionStatus: "CANCELLED", matchDeadline: null, matchedAt: null, cancelReason: "cancelled" },
+        part({ orderId: `${seed.orderId}-1`, amount: 40, transactionStatus: "SUCCESS" }),
+        part({ orderId: `${seed.orderId}-2`, amount: 60, transactionStatus: "PENDING", matchedAt: null }),
       ],
-    });
-    const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
-    const processed = await processCeloxC2CCallbackEvent(queued.eventId);
+    }));
 
-    expect(processed.processing_state).toBe("applied");
-    // หัก 10,000 สตางค์ (100 บาท) คืน 15,000 เข้า withdrawable — ไม่ใช่หักเต็ม 25,000
-    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 30_000, withdrawable_satang: 30_000 });
-    const row = await readC2CRow(seed.transactionId);
-    expect(row.settled_amount_satang).toBe(10_000);
-    expect(row.unfilled_amount_satang).toBe(15_000);
-  });
-
-  it("returns the whole amount and debits nothing when the withdrawal settled nothing", async () => {
-    const seed = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
-    const payload = withdrawalCallback(seed, {
-      transactionStatus: "EXPIRED", settledAmount: 0, unfilledAmount: 100,
-      parts: [{ orderId: `${seed.orderId}-1`, amount: 100, feeAmount: 0, transactionStatus: "EXPIRED", matchDeadline: null, matchedAt: null, cancelReason: "expired" }],
-    });
-    const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
-    const processed = await processCeloxC2CCallbackEvent(queued.eventId);
-
-    expect(processed.processing_state).toBe("applied");
-    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 20_000, withdrawable_satang: 20_000 });
-    expect((await readLocalTransaction(seed.localTransactionId)).status).toBe("failed");
-  });
-
-  it("moves no money and writes no terminal status while any part is still running", async () => {
-    const seed = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
-    const payload = withdrawalCallback(seed, {
-      amount: 100, settledAmount: 60, unfilledAmount: 40,
-      parts: [
-        { orderId: `${seed.orderId}-1`, amount: 60, feeAmount: 2, transactionStatus: "SUCCESS", matchDeadline: null, matchedAt: new Date().toISOString(), cancelReason: null },
-        { orderId: `${seed.orderId}-2`, amount: 40, feeAmount: 0, transactionStatus: "PENDING_TRANSFER", matchDeadline: null, matchedAt: null, cancelReason: null },
-      ],
-    });
-    const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
-    const processed = await processCeloxC2CCallbackEvent(queued.eventId);
-
-    expect(processed.processing_state).toBe("recorded");
     expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 20_000, withdrawable_satang: 10_000 });
     const row = await readC2CRow(seed.transactionId);
+    // ห้ามเขียนสถานะ terminal ลงแถวขณะที่ยังมีก้อนวิ่งอยู่ ไม่งั้น callback ที่ปิดคำขอจริงจะชนกับมัน
     expect(row.transaction_status).toBe("PENDING_TRANSFER");
+    expect(row.settled_amount_satang).toBe(4_000);
     expect(row.funds_reserved).toBe(true);
     expect((await readLocalTransaction(seed.localTransactionId)).status).toBe("pending");
   });
 
-  it("fails the event without moving money when settledAmount + unfilledAmount does not equal amount", async () => {
-    const seed = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
-    const payload = withdrawalCallback(seed, { amount: 100, settledAmount: 60, unfilledAmount: 30 });
-    const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
-    const processed = await processCeloxC2CCallbackEvent(queued.eventId);
+  it("ปฏิเสธเมื่อ settledAmount + unfilledAmount ไม่เท่ากับ amount ตอนทุกก้อนจบแล้ว", async () => {
+    const seed = await seedC2C({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
+    await expect(syncCeloxC2CTransaction(body(seed, {
+      amount: 100,
+      settledAmount: 40,
+      unfilledAmount: 30,
+      parts: [part({ orderId: `${seed.orderId}-1`, amount: 40, transactionStatus: "SUCCESS" })],
+    }))).rejects.toThrow();
 
-    expect(processed.processing_state).toBe("failed");
     expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 20_000, withdrawable_satang: 10_000 });
   });
 
-  it("fails the event when settledAmount is larger than the requested amount", async () => {
-    const seed = await seedWithdrawal({ balanceSatang: 40_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
-    const payload = withdrawalCallback(seed, { amount: 150, settledAmount: 150, unfilledAmount: 0 });
+  it("ปฏิเสธ settledAmount ที่มากกว่ายอดที่กันไว้เดิม", async () => {
+    const seed = await seedC2C({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
+    await expect(syncCeloxC2CTransaction(body(seed, {
+      amount: 150,
+      settledAmount: 150,
+      unfilledAmount: 0,
+      parts: [part({ orderId: `${seed.orderId}-1`, amount: 150, transactionStatus: "SUCCESS" })],
+    }))).rejects.toThrow();
+  });
+});
+
+describe("processCeloxC2CCallbackEvent — ยิงครั้งเดียวตอนจบพร้อม parts ทั้งหมด", () => {
+  it("คำขอ 250 ที่แบ่งเป็น 100/100/50 แล้วสำเร็จก้อนเดียว หักลูกค้า 100 คืน 150", async () => {
+    const seed = await seedC2C({ balanceSatang: 50_000, withdrawableSatang: 25_000, amountSatang: 25_000, feeSatang: 375 });
+    const payload: CeloxC2CCallbackRequest = body(seed, {
+      transactionStatus: "SUCCESS",
+      amount: 250,
+      feeAmount: 3.75,
+      settledAmount: 100,
+      unfilledAmount: 150,
+      parts: [
+        part({ orderId: `${seed.orderId}-1`, amount: 100, transactionStatus: "SUCCESS" }),
+        part({ orderId: `${seed.orderId}-2`, amount: 100, transactionStatus: "CANCELLED", matchedAt: null, cancelReason: "หมดเวลาโอน" }),
+        part({ orderId: `${seed.orderId}-3`, amount: 50, transactionStatus: "CANCELLED", matchedAt: null, cancelReason: "ผู้ใช้ยกเลิก" }),
+      ],
+    });
     const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
     const processed = await processCeloxC2CCallbackEvent(queued.eventId);
 
-    expect(processed.processing_state).toBe("failed");
-    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 40_000, withdrawable_satang: 10_000 });
+    expect(processed.processing_state).toBe("applied");
+    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 40_000, withdrawable_satang: 40_000 });
+    const row = await readC2CRow(seed.transactionId);
+    expect(row.settled_amount_satang).toBe(10_000);
+    expect(row.unfilled_amount_satang).toBe(15_000);
+    expect(row.funds_reserved).toBe(false);
+    expect((await readLocalTransaction(seed.localTransactionId)).status).toBe("success");
   });
 
-  it("credits a deposit by settledAmount, and treats a SUCCESS with settledAmount 0 as unsuccessful", async () => {
-    const credited = await seedDeposit({ amountSatang: 10_000 });
-    const creditedPayload: CeloxC2CCallbackRequest = {
-      ...withdrawalCallback(credited, { amount: 100, settledAmount: 100 }),
-      direction: "deposit",
-      unfilledAmount: null,
-    };
-    const queuedCredit = await enqueueCeloxC2CCallbackEvent(creditedPayload, FAKE_HASH);
-    expect((await processCeloxC2CCallbackEvent(queuedCredit.eventId)).processing_state).toBe("applied");
-    expect(await readCustomer(credited.customerId)).toEqual({ balance_satang: 10_000, withdrawable_satang: 10_000 });
+  it("คำขอที่ถูกยกเลิกทั้งก้อน คืนเงินเต็มยอดและไม่หักลูกค้าเลย (unfilledAmount = amount)", async () => {
+    const seed = await seedC2C({ balanceSatang: 50_000, withdrawableSatang: 25_000, amountSatang: 25_000, feeSatang: 375 });
+    const payload: CeloxC2CCallbackRequest = body(seed, {
+      transactionStatus: "CANCELLED",
+      amount: 250,
+      feeAmount: 3.75,
+      settledAmount: 0,
+      unfilledAmount: 250,
+      parts: [
+        part({ orderId: `${seed.orderId}-1`, amount: 100, transactionStatus: "CANCELLED", matchedAt: null, cancelReason: "หมดเวลาโอน" }),
+        part({ orderId: `${seed.orderId}-2`, amount: 150, transactionStatus: "EXPIRED", matchedAt: null, cancelReason: null }),
+      ],
+    });
+    const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
+    const processed = await processCeloxC2CCallbackEvent(queued.eventId);
 
-    const empty = await seedDeposit({ amountSatang: 10_000 });
-    const emptyPayload: CeloxC2CCallbackRequest = {
-      ...withdrawalCallback(empty, { amount: 100, settledAmount: 0 }),
-      direction: "deposit",
-      unfilledAmount: null,
-    };
-    const queuedEmpty = await enqueueCeloxC2CCallbackEvent(emptyPayload, FAKE_HASH);
-    expect((await processCeloxC2CCallbackEvent(queuedEmpty.eventId)).processing_state).toBe("applied");
-    expect(await readCustomer(empty.customerId)).toEqual({ balance_satang: 0, withdrawable_satang: 0 });
-    expect((await readLocalTransaction(empty.localTransactionId)).status).toBe("failed");
+    expect(processed.processing_state).toBe("applied");
+    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 50_000, withdrawable_satang: 50_000 });
+    const row = await readC2CRow(seed.transactionId);
+    expect(row.transaction_status).toBe("CANCELLED");
+    expect(row.settled_amount_satang).toBe(0);
+    expect(row.unfilled_amount_satang).toBe(25_000);
+    expect(row.funds_reserved).toBe(false);
+    expect((await readLocalTransaction(seed.localTransactionId)).status).toBe("failed");
   });
 
-  it("records a deposit callback that is still running, keeping its null unfilledAmount", async () => {
-    const seed = await seedDeposit({ amountSatang: 10_000 });
-    const payload: CeloxC2CCallbackRequest = {
-      ...withdrawalCallback(seed, {
-        transactionStatus: "PENDING_TRANSFER", amount: 100, settledAmount: 0,
-        parts: [{ orderId: `${seed.orderId}-1`, amount: 100, feeAmount: 2, transactionStatus: "PENDING_TRANSFER", matchDeadline: null, matchedAt: null, cancelReason: null }],
-      }),
-      direction: "deposit",
-      unfilledAmount: null,
-    };
+  it("บันทึกสถานะแต่ไม่ขยับเงินเมื่อยังมีก้อนที่ไม่ terminal", async () => {
+    const seed = await seedC2C({ balanceSatang: 50_000, withdrawableSatang: 25_000, amountSatang: 25_000, feeSatang: 375 });
+    const payload: CeloxC2CCallbackRequest = body(seed, {
+      transactionStatus: "PENDING_REVIEW",
+      amount: 250,
+      settledAmount: 0,
+      unfilledAmount: 0,
+      heldAmount: 3.75,
+      awaitingManualReview: true,
+      parts: [part({ orderId: `${seed.orderId}-1`, amount: 250, transactionStatus: "PENDING_REVIEW", matchedAt: null })],
+    });
     const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
     const processed = await processCeloxC2CCallbackEvent(queued.eventId);
 
     expect(processed.processing_state).toBe("recorded");
+    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 50_000, withdrawable_satang: 25_000 });
     const row = await readC2CRow(seed.transactionId);
-    expect(row.transaction_status).toBe("PENDING_TRANSFER");
-    expect(row.unfilled_amount_satang).toBeNull();
-    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 0, withdrawable_satang: 0 });
+    expect(row.transaction_status).toBe("PENDING_REVIEW");
+    expect(row.awaiting_manual_review).toBe(true);
+    expect(row.funds_reserved).toBe(true);
   });
 
-  it("takes awaitingManualReview straight from the body: false for topup, true for review", async () => {
-    const topup = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
-    const topupPayload = withdrawalCallback(topup, {
-      transactionStatus: "PENDING_TOPUP_C2C", settledAmount: 0, unfilledAmount: 100, awaitingManualReview: false,
-      parts: [{ orderId: `${topup.orderId}-1`, amount: 100, feeAmount: 0, transactionStatus: "PENDING_TOPUP_C2C", matchDeadline: null, matchedAt: null, cancelReason: null }],
-    });
-    const queuedTopup = await enqueueCeloxC2CCallbackEvent(topupPayload, FAKE_HASH);
-    expect((await processCeloxC2CCallbackEvent(queuedTopup.eventId)).processing_state).toBe("recorded");
-    expect((await readC2CRow(topup.transactionId)).awaiting_manual_review).toBe(false);
-    expect(await readCustomer(topup.customerId)).toEqual({ balance_satang: 20_000, withdrawable_satang: 10_000 });
-
-    const review = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
-    const reviewPayload = withdrawalCallback(review, {
-      transactionStatus: "PENDING_REVIEW", settledAmount: 0, unfilledAmount: 100, awaitingManualReview: true,
-      parts: [{ orderId: `${review.orderId}-1`, amount: 100, feeAmount: 0, transactionStatus: "PENDING_REVIEW", matchDeadline: null, matchedAt: null, cancelReason: null }],
-    });
-    const queuedReview = await enqueueCeloxC2CCallbackEvent(reviewPayload, FAKE_HASH);
-    expect((await processCeloxC2CCallbackEvent(queuedReview.eventId)).processing_state).toBe("recorded");
-    expect((await readC2CRow(review.transactionId)).awaiting_manual_review).toBe(true);
-    expect(await readCustomer(review.customerId)).toEqual({ balance_satang: 20_000, withdrawable_satang: 10_000 });
-  });
-});
-
-describe("getCeloxC2CCallbackTimeline", () => {
-  it("reports the callbacks the inbox received, looked up by orderId or referenceId", async () => {
-    const seed = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
-    const payload = withdrawalCallback(seed, {
-      transactionStatus: "EXPIRED", settledAmount: 0, unfilledAmount: 100,
-      parts: [{ orderId: `${seed.orderId}-1`, amount: 100, feeAmount: 0, transactionStatus: "EXPIRED", matchDeadline: null, matchedAt: null, cancelReason: null }],
+  it("PENDING_TOPUP_C2C ไม่ตั้ง awaiting_manual_review (ยังเดินนาฬิกาเดิมและปิดเองได้)", async () => {
+    const seed = await seedC2C({ balanceSatang: 50_000, withdrawableSatang: 25_000, amountSatang: 25_000, feeSatang: 375 });
+    const payload: CeloxC2CCallbackRequest = body(seed, {
+      transactionStatus: "PENDING_TOPUP_C2C",
+      amount: 250,
+      settledAmount: 0,
+      unfilledAmount: 0,
+      awaitingManualReview: false,
+      parts: [part({ orderId: `${seed.orderId}-1`, amount: 250, transactionStatus: "PENDING_TOPUP_C2C", matchedAt: null })],
     });
     const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
     await processCeloxC2CCallbackEvent(queued.eventId);
 
-    for (const reference of [seed.orderId, seed.referenceId, seed.transactionId]) {
-      const timeline = await getCeloxC2CCallbackTimeline(reference);
-      expect(timeline.found).toBe(true);
-      expect(timeline.transactionId).toBe(seed.transactionId);
-      expect(timeline.transactionStatus).toBe("EXPIRED");
-      expect(timeline.steps).toHaveLength(1);
-      expect(timeline.steps[0]).toMatchObject({
-        status: "EXPIRED",
-        processingState: "applied",
-        settledAmount: 0,
-        unfilledAmount: 100,
-        awaitingManualReview: false,
-        allPartsTerminal: true,
-        receivedCount: 1,
-      });
-    }
+    expect((await readC2CRow(seed.transactionId)).awaiting_manual_review).toBe(false);
   });
 
-  it("reports an empty timeline for an order that has had no callback yet", async () => {
-    const seed = await seedWithdrawal({ balanceSatang: 20_000, withdrawableSatang: 10_000, amountSatang: 10_000, feeSatang: 200 });
-    const timeline = await getCeloxC2CCallbackTimeline(seed.orderId);
-    expect(timeline.found).toBe(true);
-    expect(timeline.transactionStatus).toBe("PENDING_TRANSFER");
-    expect(timeline.steps).toEqual([]);
+  it("ไม่ขยับเงินและ mark failed เมื่อยอดสามตัวไม่ลงรอยกันตอนทุกก้อนจบแล้ว", async () => {
+    const seed = await seedC2C({ balanceSatang: 50_000, withdrawableSatang: 25_000, amountSatang: 25_000, feeSatang: 375 });
+    const payload: CeloxC2CCallbackRequest = body(seed, {
+      transactionStatus: "SUCCESS",
+      amount: 250,
+      settledAmount: 100,
+      unfilledAmount: 100,
+      parts: [
+        part({ orderId: `${seed.orderId}-1`, amount: 100, transactionStatus: "SUCCESS" }),
+        part({ orderId: `${seed.orderId}-2`, amount: 150, transactionStatus: "CANCELLED", matchedAt: null, cancelReason: "หมดเวลาโอน" }),
+      ],
+    });
+    const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
+    const processed = await processCeloxC2CCallbackEvent(queued.eventId);
+
+    expect(processed.processing_state).toBe("failed");
+    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 50_000, withdrawable_satang: 25_000 });
+    expect((await readLocalTransaction(seed.localTransactionId)).status).toBe("pending");
   });
 
-  it("reports found=false for a reference nothing is bound to", async () => {
-    const timeline = await getCeloxC2CCallbackTimeline("KLANG-C2C-WD-NOPE");
-    expect(timeline.found).toBe(false);
-    expect(timeline.transactionId).toBeNull();
-    expect(timeline.steps).toEqual([]);
+  it("ฝั่งฝากเครดิตจาก settledAmount ตัวเดียวกับฝั่งถอน (ไม่ใช่ amount ของคำขอ)", async () => {
+    const seed = await seedC2C({
+      direction: "deposit", balanceSatang: 0, withdrawableSatang: 0, amountSatang: 500_000, feeSatang: 0,
+    });
+    const payload: CeloxC2CCallbackRequest = body(seed, {
+      direction: "deposit",
+      transactionStatus: "SUCCESS",
+      amount: 5000,
+      feeAmount: 0,
+      settledAmount: 5000,
+      unfilledAmount: null,
+      heldAmount: 0,
+      parts: [part({ orderId: seed.orderId, amount: 5000, feeAmount: 0, transactionStatus: "SUCCESS" })],
+    });
+    const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
+    const processed = await processCeloxC2CCallbackEvent(queued.eventId);
+
+    expect(processed.processing_state).toBe("applied");
+    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 500_000, withdrawable_satang: 500_000 });
+    const row = await readC2CRow(seed.transactionId);
+    expect(row.unfilled_amount_satang).toBeNull();
+    expect((await readLocalTransaction(seed.localTransactionId)).status).toBe("success");
+  });
+
+  it("ฝั่งฝากที่ settledAmount เป็น 0 ปิดเป็นรายการไม่สำเร็จและไม่เครดิตลูกค้า", async () => {
+    const seed = await seedC2C({
+      direction: "deposit", balanceSatang: 0, withdrawableSatang: 0, amountSatang: 500_000, feeSatang: 0,
+    });
+    const payload: CeloxC2CCallbackRequest = body(seed, {
+      direction: "deposit",
+      transactionStatus: "EXPIRED",
+      amount: 5000,
+      feeAmount: 0,
+      settledAmount: 0,
+      unfilledAmount: null,
+      heldAmount: 0,
+      parts: [part({
+        orderId: seed.orderId, amount: 5000, feeAmount: 0,
+        transactionStatus: "EXPIRED", matchedAt: null,
+      })],
+    });
+    const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
+    const processed = await processCeloxC2CCallbackEvent(queued.eventId);
+
+    expect(processed.processing_state).toBe("applied");
+    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 0, withdrawable_satang: 0 });
+    expect((await readLocalTransaction(seed.localTransactionId)).status).toBe("failed");
+  });
+
+  it("ปฏิเสธฝั่งฝากที่ settledAmount มากกว่ายอดตั้งต้นของคำขอ", async () => {
+    const seed = await seedC2C({
+      direction: "deposit", balanceSatang: 0, withdrawableSatang: 0, amountSatang: 500_000, feeSatang: 0,
+    });
+    const payload: CeloxC2CCallbackRequest = body(seed, {
+      direction: "deposit",
+      transactionStatus: "SUCCESS",
+      amount: 5000,
+      feeAmount: 0,
+      settledAmount: 5500,
+      unfilledAmount: null,
+      heldAmount: 0,
+      parts: [part({ orderId: seed.orderId, amount: 5500, feeAmount: 0, transactionStatus: "SUCCESS" })],
+    });
+    const queued = await enqueueCeloxC2CCallbackEvent(payload, FAKE_HASH);
+    const processed = await processCeloxC2CCallbackEvent(queued.eventId);
+
+    expect(processed.processing_state).toBe("failed");
+    expect(await readCustomer(seed.customerId)).toEqual({ balance_satang: 0, withdrawable_satang: 0 });
   });
 });

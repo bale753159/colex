@@ -9,9 +9,12 @@ export async function GET(request: Request) {
   const search = url.searchParams.get("search") ?? undefined;
   const rawLimit = Number(url.searchParams.get("limit") ?? 100);
   const limit = Number.isFinite(rawLimit) ? rawLimit : 100;
+  // หน้าจอส่ง updated_at ล่าสุดที่เคยเห็นมา เพื่อขอเฉพาะแถวที่ callback เพิ่งแก้ (delta poll)
+  const rawUpdatedAfter = url.searchParams.get("updatedAfter");
+  const updatedAfter = rawUpdatedAfter && Number.isFinite(Date.parse(rawUpdatedAfter)) ? rawUpdatedAfter : undefined;
   try {
     const response: CeloxC2CListResponse = {
-      transactions: await listCeloxC2CTransactions({ search, limit }),
+      transactions: await listCeloxC2CTransactions({ search, limit, updatedAfter }),
     };
     return Response.json(response, {
       headers: { "Cache-Control": "no-store" },

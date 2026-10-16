@@ -109,6 +109,8 @@ export type CreateC2CDepositResponse = {
   amount: number;
   transferTo: C2CTransferTo | null;
   matchDeadline: string | null;
+  // หน้าชำระเงินของ Celox (ฝังเป็น iframe) — จัดการจับคู่ โอน และแนบสลิปให้เอง
+  payUrl?: string | null;
 };
 
 export type C2CSlipVerification = {
@@ -161,21 +163,42 @@ export type C2CTransactionPart = {
   cancelReason: string | null;
 };
 
+/**
+ * body ของ GET /v1/core/c2c/{reference} — และเป็น body ของ Callback C2C แบบ field
+ * ต่อ field เหมือนกันเป๊ะ (ดู `CeloxC2CCallbackRequest` ใต้ไฟล์นี้ ซึ่ง alias มาที่ type นี้)
+ */
 export type C2CTransactionResponse = {
   transactionId: string;
   orderId: string;
   referenceId: string | null;
   direction: "deposit" | "withdraw";
+  // สถานะรวมของ 'ทั้งคำขอ' แบบ roll-up (ส่วนที่ต้องการความสนใจมากที่สุดชนะ ไม่ใช่ค่าเฉลี่ย)
+  // เป็น SUCCESS ได้ทั้งที่บางก้อนยังวิ่งอยู่ — ห้ามตัดเงินจากค่านี้ ให้ดู parts[].transactionStatus
   transactionStatus: C2CTransactionStatus;
+  // ยอดตั้งต้นที่ลูกค้าขอ "เสมอ" ไม่ใช่ยอดที่จบจริง (ขอถอน 250 จบจริง 190 ก็ยังตอบ 250)
+  // เดิม Celox เขียนทับค่านี้เป็นยอดที่จบจริงเมื่อคู่โอนมาไม่ครบ — เลิกทำแล้ว
   amount: number;
   feeAmount: number;
+  // ยอดที่จบจริง = ผลรวมของก้อนที่สถานะ SUCCESS · นี่คือ field ที่ใช้ตัดเงินทั้งขาฝากและขาถอน
+  // ห้ามอ่านยอดจาก amount และไม่มี field realWithdrawAmount ให้ใช้อีกแล้ว
   settledAmount: number;
+  // ฝั่งถอนนับเฉพาะค่าธรรมเนียม (เงินต้น C2C ไม่ผ่านกระเป๋าปฏิบัติการ) ฝั่งฝากนับเงินต้น+ค่าธรรมเนียม
   heldAmount: number;
-  // ฝั่งถอน: ยอดที่ยังขาดอยู่ (0 เมื่อไม่มีส่วนไหนขาด) · ฝั่งฝากเป็น null เสมอ
+  // ฝั่งถอน: ยอดที่ถอนไม่สำเร็จและต้องคืนลูกค้า นับ "ทุกบาท" ที่ไม่สำเร็จ รวมก้อนที่ถูกยกเลิก
+  // หรือหมดเวลาเต็มยอด (เดิมนับเฉพาะส่วนที่ขาดตอนคู่โอนมาไม่ครบ จึงตอบ 0 ในเคสพวกนั้น)
+  // เป็น 0 เมื่อไม่มีอะไรต้องคืน ไม่ใช่ null · ฝั่งฝากเป็น null เสมอ
+  // settledAmount + unfilledAmount = amount เมื่อทุกก้อนของคำขอจบแล้ว
   unfilledAmount: number | null;
+  // true เมื่อมีก้อนใดค้างรอเจ้าหน้าที่โดยไม่มีนาฬิกาปลดเอง (PENDING_REFUND_C2C / PENDING_REVIEW)
+  // PENDING_MANUAL_C2C ถูกถอดออกจากเงื่อนไขนี้แล้ว — คิวถูกจับคู่ด้วยเครื่องเองทุกไม่กี่วินาที
+  // PENDING_TOPUP_C2C ไม่นับ เพราะยังเดินนาฬิกาเดิมและปิดเองได้ด้วยการโอนส่วนที่ขาด
   awaitingManualReview: boolean;
   matchDeadline: string | null;
+  // เฉพาะฝั่งฝากที่ยังโอนได้ · ฝั่งถอนเป็น null เสมอ
   transferTo: C2CTransferTo | null;
+  // เป็น array เสมอทั้งฝั่งฝากและถอน (ไม่ split ก็ได้ array หนึ่งสมาชิก ไม่ใช่ object เดี่ยว)
+  // เป็นที่เดียวที่บอกว่าแต่ละก้อนสำเร็จหรือไม่ — เวลากระทบยอดให้เทียบผลรวม parts กับ
+  // settledAmount ไม่ใช่กับ amount
   parts: [C2CTransactionPart, ...C2CTransactionPart[]];
 };
 
@@ -213,6 +236,8 @@ export type CeloxC2CListItem = {
   feeAmount: number;
   settledAmount: number;
   heldAmount: number;
+  // ฝั่งถอน: ยอดที่ต้องคืนลูกค้า · ฝั่งฝากและรายการที่ยังไม่จบเป็น null
+  unfilledAmount: number | null;
   awaitingManualReview: boolean;
   matchDeadline: string | null;
   createdAt: string;
@@ -221,31 +246,6 @@ export type CeloxC2CListItem = {
 
 export type CeloxC2CListResponse = {
   transactions: CeloxC2CListItem[];
-};
-
-// สรุป callback ที่ inbox ของเราได้รับจริงสำหรับรายการหนึ่ง ใช้บอกใน dialog ว่าเดินมาถึงขั้นไหนแล้ว
-// อ่านจากฐานข้อมูลของเราล้วน ๆ ไม่เรียก Celox จึง poll ถี่กว่า GET สถานะได้
-export type CeloxC2CCallbackStep = {
-  status: C2CTransactionStatus;
-  // pending = เพิ่งรับเข้า inbox · applied = ปรับยอดแล้ว · recorded = บันทึกสถานะแล้วแต่ยังไม่ขยับเงิน
-  // unmatched = ยังหารายการที่ผูกไม่เจอ · failed = ประมวลผลไม่สำเร็จ
-  processingState: CeloxCallbackProcessingState;
-  settledAmount: number;
-  unfilledAmount: number | null;
-  awaitingManualReview: boolean;
-  allPartsTerminal: boolean;
-  receivedCount: number;
-  receivedAt: string;
-  lastReceivedAt: string;
-  lastError: string | null;
-};
-
-export type CeloxC2CCallbackTimeline = {
-  found: boolean;
-  transactionId: string | null;
-  transactionStatus: C2CTransactionStatus | null;
-  updatedAt: string | null;
-  steps: CeloxC2CCallbackStep[];
 };
 
 export type SlipVerification =
@@ -295,10 +295,15 @@ export type CeloxCallbackResponse = {
   duplicate: boolean;
 };
 
-// Callback C2C ใช้ body รูปแบบเดียวกับ `GET /v1/core/c2c/{reference}` ทุก field
-// จึงประกาศเป็น type เดียวและ validate ด้วยตัวตัดสินเดียวกันทั้งสองฝั่ง
-// (สัญญาเดิมมี `status`, `occurredAt`, `event`, `settledTotal`, `unfilledTotal`
-//  และ `parts[].transactionId` — ถูกถอดออกจากสัญญาใหม่ทั้งหมด)
+/**
+ * body ของ Callback C2C เหมือน body ของ GET /v1/core/c2c/{reference} แบบ field ต่อ field
+ * ทุกตัว จึงประกาศเป็น type เดียวกันและใช้ validator ตัวเดียวกันทั้งสองทาง
+ *
+ * BREAKING จาก contract เดิม: `status` → `transactionStatus` (ทั้งหัว body และใน parts[]),
+ * `parts[]` ไม่มี `transactionId` แล้ว, `settledTotal`/`unfilledTotal` หายไปโดยยอดที่จบจริง
+ * อ่านจาก `settledAmount` ซึ่งส่งมาทุกครั้งที่ยิงไม่ใช่แค่ครั้งสุดท้ายของกลุ่ม,
+ * และ contract ใหม่ไม่มี `occurredAt`/`event` อีกต่อไป
+ */
 export type CeloxC2CCallbackRequest = C2CTransactionResponse;
 
 // Celox ignores the acknowledgement body, but keeping it typed makes the
@@ -306,6 +311,27 @@ export type CeloxC2CCallbackRequest = C2CTransactionResponse;
 export type CeloxC2CCallbackResponse = {
   received: true;
   duplicate: boolean;
+};
+
+export type CeloxC2CCallbackStep = {
+  status: C2CTransactionStatus;
+  processingState: CeloxCallbackProcessingState;
+  settledAmount: number;
+  unfilledAmount: number | null;
+  awaitingManualReview: boolean;
+  allPartsTerminal: boolean;
+  receivedCount: number;
+  receivedAt: string;
+  lastReceivedAt: string;
+  lastError: string | null;
+};
+
+export type CeloxC2CCallbackTimeline = {
+  found: boolean;
+  transactionId: string | null;
+  transactionStatus: C2CTransactionStatus | null;
+  updatedAt: string | null;
+  steps: CeloxC2CCallbackStep[];
 };
 
 // Celox ignores the response body; the Route Handler still returns the typed
@@ -342,6 +368,22 @@ export type CustomerCeloxCallbacksResponse = {
   customerId: string;
   callbacks: CeloxCallbackEvent[];
   withdrawalHolds: CeloxWithdrawalHold[];
+};
+
+// Log ดิบของทุก request ที่เข้ามาที่ /api/celox/c2c/callback ไม่ว่าจะผ่านการตรวจ
+// ลายเซ็นหรือ validate สำเร็จหรือไม่ ใช้สำหรับหน้า log callback c2c เท่านั้น
+// แยกจาก CeloxCallbackEvent ซึ่งเก็บ field ที่ parse แล้วสำหรับ business logic
+export type CeloxC2CCallbackRawLogItem = {
+  id: number;
+  receivedAt: string;
+  requestUrl: string;
+  requestBody: string | null;
+  responseStatus: number;
+  responseBody: string | null;
+};
+
+export type CeloxC2CCallbackRawLogsResponse = {
+  logs: CeloxC2CCallbackRawLogItem[];
 };
 
 export type CeloxWithdrawalHold = {

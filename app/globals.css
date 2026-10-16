@@ -271,6 +271,12 @@ tbody tr:hover { background: oklch(0.975 0.008 85); }
 .customer-table th:nth-child(2), .customer-table th:nth-child(3), .customer-table th:nth-child(4), .customer-table th:nth-child(5) { width: 145px; }
 .customer-table th:nth-child(6) { width: 170px; }
 .customer-table th:nth-child(7) { width: 224px; }
+.callback-log-table { min-width: 720px; }
+.callback-log-table th:nth-child(1) { width: 190px; }
+.callback-log-table th:nth-child(3) { width: 110px; }
+.callback-log-row { cursor: pointer; }
+.callback-log-row:hover { background: var(--surface); }
+.callback-log-url { overflow: hidden; color: var(--ink-soft); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 .customer-money { text-align: right; font-variant-numeric: tabular-nums; }
 .customer-money strong { display: block; font-size: 12px; font-weight: 650; white-space: nowrap; }
 .customer-money small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; white-space: nowrap; }
@@ -514,6 +520,13 @@ tbody tr:hover { background: oklch(0.975 0.008 85); }
 .c2c-reference-strip { min-height: 54px; margin-top: 22px; padding: 10px 14px; border-block: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 18px; text-align: left; }
 .c2c-reference-strip span { color: var(--muted); font-size: 10px; }
 .c2c-reference-strip strong { overflow-wrap: anywhere; text-align: right; font-size: 11px; }
+.c2c-dialog.paying { height: calc(100dvh - 40px); }
+.c2c-pay-panel { flex: 1; min-height: 0; padding: 12px 22px 16px; display: flex; flex-direction: column; }
+.c2c-pay-panel .transfer-status-row { margin-bottom: 10px; }
+.c2c-pay-frame { width: 100%; flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius-md); background: white; display: block; }
+.c2c-pay-panel .deposit-actions { margin-top: 12px; }
+.c2c-pay-external { min-height: 32px; color: var(--primary-strong); display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 650; text-decoration: none; }
+.c2c-pay-external:hover { text-decoration: underline; }
 .c2c-deadline { margin-top: 12px; color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 11px; }
 .privacy-notice { margin-top: 14px; padding: 12px; border-radius: var(--radius-sm); background: var(--surface); color: var(--muted); display: flex; align-items: flex-start; gap: 9px; font-size: 11px; line-height: 1.55; }
 .privacy-notice svg { flex: 0 0 auto; margin-top: 1px; color: var(--ink-soft); }
@@ -527,25 +540,11 @@ tbody tr:hover { background: oklch(0.975 0.008 85); }
 .c2c-result.neutral .state-symbol { color: var(--muted); background: var(--surface-strong); }
 .c2c-cancelled .state-symbol { color: var(--muted); background: var(--surface-strong); }
 
-/* ฟีด callback ที่ระบบได้รับจริงจาก Celox — บอกใน dialog ว่ารายการเดินมาถึงขั้นไหนแล้ว */
-.c2c-callback-feed { margin-top: 16px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); text-align: left; }
-.c2c-callback-feed > header { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 11px; }
-.c2c-callback-feed > header svg { flex: 0 0 auto; color: var(--primary-strong); }
-.c2c-callback-feed > header strong { font-size: 11px; }
-.c2c-callback-feed > header span { margin-left: auto; color: var(--muted); font-size: 10px; }
-.c2c-callback-empty { margin: 9px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
-.c2c-callback-steps { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.c2c-callback-steps li { display: flex; align-items: flex-start; gap: 9px; }
-.c2c-callback-steps li > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.c2c-callback-mark { flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; color: var(--primary-strong); background: var(--primary-soft); }
-.c2c-callback-steps li.state-applied .c2c-callback-mark { color: var(--success); background: var(--success-bg); }
-.c2c-callback-steps li.state-failed .c2c-callback-mark { color: var(--danger); background: var(--danger-bg); }
-.c2c-callback-steps li.state-unmatched .c2c-callback-mark { color: oklch(0.5 0.11 56); background: oklch(0.96 0.033 58); }
-.c2c-callback-steps strong { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
-.c2c-callback-steps time { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
-.c2c-callback-steps p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.c2c-callback-steps small { color: var(--ink-soft); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
-.c2c-callback-flag { color: oklch(0.5 0.11 56); }
+.c2c-callback-feed { margin-top: 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; text-align: left; }
+.c2c-callback-feed > header { padding: 11px 12px; border-bottom: 1px solid var(--line); display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.c2c-callback-feed h3 { margin: 0; font-size: 12px; }.c2c-callback-feed header p { margin: 3px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }.c2c-callback-feed > header > svg { color: var(--primary-strong); flex: 0 0 auto; }
+.c2c-callback-empty, .c2c-callback-error { margin: 0; padding: 12px; color: var(--muted); font-size: 10px; line-height: 1.5; }.c2c-callback-error { color: var(--danger); display: flex; gap: 6px; align-items: flex-start; }
+.c2c-callback-step { padding: 11px 12px; border-top: 1px solid var(--line); }.c2c-callback-step:first-of-type { border-top: 0; }.c2c-callback-step-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }.c2c-callback-step time { color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }.c2c-callback-step > p { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }.c2c-callback-step > strong { margin-top: 8px; color: var(--ink-soft); display: flex; align-items: flex-start; gap: 6px; font-size: 10px; line-height: 1.45; }.c2c-callback-step > strong svg { color: var(--success); flex: 0 0 auto; }.c2c-callback-flags { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }.c2c-callback-flags span { padding: 3px 6px; border-radius: 999px; background: oklch(0.955 0.033 58); color: oklch(0.42 0.082 55); display: inline-flex; align-items: center; gap: 4px; font-size: 9px; font-weight: 650; }
 
 .c2c-page-heading { align-items: flex-start; }
 .c2c-lookup { width: min(520px, 48vw); }
@@ -627,6 +626,9 @@ tbody tr:hover { background: oklch(0.975 0.008 85); }
 .c2c-empty svg, .c2c-detail-error svg { color: var(--primary-strong); }
 .c2c-empty h3, .c2c-detail-error h3 { margin: 12px 0 4px; color: var(--ink); font-size: 14px; }
 .c2c-empty p, .c2c-detail-error p { max-width: 52ch; margin: 0; font-size: 11px; line-height: 1.55; }
+.callback-log-body { padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.callback-log-body h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); }
+.callback-log-body pre { margin: 0; padding: 12px; border-radius: var(--radius-sm); background: var(--surface); overflow-x: auto; color: var(--ink-soft); font-size: 10px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .c2c-detail-error svg { color: var(--danger); }
 .c2c-detail-error .button { margin-top: 16px; }
 .c2c-authority-note { margin-top: 16px; padding: 13px 16px; border-radius: var(--radius-md); background: var(--surface); color: var(--muted); display: flex; align-items: flex-start; gap: 9px; font-size: 10px; line-height: 1.55; }
@@ -734,6 +736,11 @@ tbody tr:hover { background: oklch(0.975 0.008 85); }
   .customer-dialog { border-radius: 16px 16px 0 0; }
   .deposit-dialog-layer { padding: 0; align-items: end; }
   .celox-deposit-dialog { width: 100%; max-height: 96dvh; border-radius: 16px 16px 0 0; }
+  .c2c-dialog.paying { height: 96dvh; }
+  /* มือถือ: ให้ iframe สูงเท่าเนื้อหาหน้า Celox (~800px) แล้ว scroll ที่ dialog ชั้นเดียว แทนการ scroll ซ้อนใน iframe */
+  .c2c-pay-panel { padding: 10px 12px 0; display: block; overflow-y: auto; overscroll-behavior: contain; }
+  .c2c-pay-frame { height: 900px; flex: none; }
+  .c2c-pay-panel .deposit-actions { width: auto; position: sticky; bottom: 0; margin: 12px -12px 0; padding: 12px; border-top: 1px solid var(--line); background: white; z-index: 1; }
   .deposit-steps { padding-inline: 18px; }
   .deposit-steps li { font-size: 9px; }
   .deposit-steps li:not(:last-child)::after { margin-inline: 7px; }
@@ -774,3 +781,6 @@ tbody tr:hover { background: oklch(0.975 0.008 85); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+.c2c-rows > button.updated { animation: c2c-row-flash 2.4s ease-out; }
+@keyframes c2c-row-flash { 0%, 55% { background: var(--success-bg); box-shadow: inset 3px 0 0 var(--success); } }
+.c2c-detail-feed { margin: 0 20px; }
